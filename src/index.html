@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3speak Video Player</title>
+</head>
+<body>
+    <div class="container">
+        <div class="header-logo">
+            <img src="/assets/3speak.png" alt="3speak" />
+        </div>
+        
+        <!-- Video.js Player -->
+        <div class="player-wrapper">
+            <video
+                id="snapie-player"
+                class="video-js vjs-default-skin"
+                controls
+                preload="auto"
+                width="854"
+                height="480"
+                data-setup='{}'>
+                <p class="vjs-no-js">
+                    To view this video please enable JavaScript, and consider upgrading to a web browser that
+                    <a href="https://videojs.com/html5-video-support/" target="_blank">supports HTML5 video</a>
+                </p>
+            </video>
+            <div class="player-logo player-logo-top-left">
+                <img src="/assets/3slogo.webp" alt="3speak" />
+            </div>
+            <div class="player-logo player-logo-bottom-right">
+                <img src="/assets/logo.png" alt="Logo" />
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <h3>Video Info</h3>
+            <p>Title: <span id="current-source">Loading...</span></p>
+            <p>Status: <span id="player-state">Initializing...</span></p>
+        </div>
+    </div>
+</body>
+</html>
