@@ -63,7 +63,7 @@ h3 {
   z-index: 1000;
   pointer-events: none;
   opacity: 0.85;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.5s ease;
 }
 
 .player-logo img {
@@ -79,18 +79,13 @@ h3 {
 }
 
 .player-logo-top-left img {
-  height: 60px; /* 50% bigger than default 40px */
+  height: 60px;
 }
 
 /* Bottom right logo */
 .player-logo-bottom-right {
   bottom: 50px;
   right: 10px;
-}
-
-/* Fade logos on hover to not obstruct controls */
-.player-wrapper:hover .player-logo {
-  opacity: 0.6;
 }
 
 .video-js {

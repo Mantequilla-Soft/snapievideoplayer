@@ -47,6 +47,25 @@ function initializePlayer() {
     displayCurrentQuality: true,
   });
 
+  // Setup logo fade behavior
+  const logoTopLeft = document.getElementById('logo-top-left');
+  const logoBottomRight = document.getElementById('logo-bottom-right');
+  
+  function handleLogoVisibility() {
+    const isPlaying = !player.paused();
+    const isUserActive = player.userActive();
+    
+    // Hide logos when playing and user is inactive
+    if (isPlaying && !isUserActive) {
+      if (logoTopLeft) logoTopLeft.style.opacity = '0';
+      if (logoBottomRight) logoBottomRight.style.opacity = '0';
+    } else {
+      // Show logos when paused or user is active
+      if (logoTopLeft) logoTopLeft.style.opacity = '0.85';
+      if (logoBottomRight) logoBottomRight.style.opacity = '0.85';
+    }
+  }
+
   // Player event listeners
   player.on('ready', function() {
     console.log('Player is ready');
@@ -67,11 +86,21 @@ function initializePlayer() {
   player.on('pause', function() {
     console.log('Video is paused');
     updatePlayerState('Paused');
+    handleLogoVisibility();
   });
 
   player.on('ended', function() {
     console.log('Video ended');
     updatePlayerState('Ended');
+  });
+  
+  // Handle user activity changes
+  player.on('useractive', function() {
+    handleLogoVisibility();
+  });
+  
+  player.on('userinactive', function() {
+    handleLogoVisibility();
   });
 
   player.on('error', function(error) {
