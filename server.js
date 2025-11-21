@@ -99,7 +99,7 @@ app.get('/api/watch', async (req, res) => {
       permlink: video.permlink,
       title: video.title || 'Untitled Video',
       description: video.description || '',
-      thumbnail: video.thumbnail ? transformIPFSUrl(video.thumbnail) : null, // Use primary gateway for thumbnails
+      thumbnail: video.thumbnail ? transformIPFSUrl(video.thumbnail) : `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`,
       videoUrl: videoUrls.primary,
       videoUrlFallback: videoUrls.fallback,
       duration: video.duration || 0,
@@ -153,9 +153,11 @@ app.get('/api/embed', async (req, res) => {
         fallback: `${gatewayFallback}/${video.manifest_cid}/manifest.m3u8`
       };
       
-      // Use thumbnail if available
+      // Use thumbnail if available, otherwise use default
       if (video.thumbnail_url) {
         thumbnail = video.thumbnail_url;
+      } else {
+        thumbnail = `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`;
       }
     } else {
       // Serve placeholder based on status
