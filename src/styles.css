@@ -62,11 +62,18 @@ h3 {
   height: 100%;
 }
 
-/* Force all videos to fit within the 16:9 container */
-.video-js .vjs-tech {
-  object-fit: contain !important; /* Scale video to fit within container while preserving aspect ratio */
+/* Lock video-js player to the 16:9 wrapper */
+.player-wrapper .video-js {
+  position: absolute !important;
+  top: 0;
+  left: 0;
   width: 100% !important;
   height: 100% !important;
+}
+
+/* Ensure video fits without stretching (letterboxing on sides) */
+.video-js .vjs-tech {
+  object-fit: contain !important;
 }
 
 /* Player Logo Overlay */
