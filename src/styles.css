@@ -69,6 +69,7 @@ h3 {
   left: 0;
   width: 100% !important;
   height: 100% !important;
+  min-height: 0 !important; /* Prevent Video.js from forcing internal min-height */
 }
 
 /* Ensure video fits without stretching (letterboxing on sides) */
@@ -115,6 +116,13 @@ h3 {
 .video-js .vjs-poster {
   background-size: cover;
   background-position: center;
+}
+
+/* Prevent poster images from expanding beyond container */
+.video-js .vjs-poster img {
+  object-fit: contain !important;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .video-js .vjs-big-play-button {
