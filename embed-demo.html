@@ -393,57 +393,110 @@ max-width: 450px /* Optimal width */</code>
 }</code>
             </div>
 
-            <h3 style="margin-top: 30px;">JavaScript Dynamic Detection</h3>
+            <h3 style="margin-top: 30px;">🚀 NEW: Automatic Detection (No Database Needed!)</h3>
+            <div style="background: #2d5a27; border-radius: 8px; padding: 15px; margin: 15px 0; border-left: 4px solid #4caf50;">
+                <strong style="color: #a5d6a7;">✨ The player automatically tells your frontend the video orientation!</strong><br>
+                Just listen for the <code>3speak-player-ready</code> message - no API calls, no database queries required.
+            </div>
+            
             <div class="code-block">
-                <code>// Example: Auto-adjust container based on content
-async function embedVideo(videoId, containerId) {
+                <code>// STEP 1: Add this ONE TIME to your app (listens for ALL videos)
+window.addEventListener('message', function(event) {
+    // Check if message is from 3speak player
+    if (event.data.type === '3speak-player-ready') {
+        console.log('Video loaded:', event.data);
+        // event.data contains:
+        // {
+        //   type: '3speak-player-ready',
+        //   isVertical: true/false,
+        //   width: 1080,
+        //   height: 1920,
+        //   aspectRatio: 0.5625,
+        //   orientation: 'vertical' // or 'horizontal' or 'square'
+        // }
+        
+        // Find the iframe that sent this message
+        const iframe = event.source.frameElement;
+        
+        if (event.data.isVertical) {
+            // Vertical video - adjust size
+            iframe.style.height = '800px';
+            iframe.style.maxWidth = '450px';
+            iframe.parentElement.classList.add('vertical-video');
+        } else {
+            // Horizontal video - standard size
+            iframe.style.height = '450px';
+            iframe.style.maxWidth = '800px';
+            iframe.parentElement.classList.add('horizontal-video');
+        }
+    }
+});
+
+// STEP 2: Embed videos normally (no special code needed per video!)
+function embedVideo(author, permlink, containerId) {
     const container = document.getElementById(containerId);
     const iframe = document.createElement('iframe');
     
-    // You could detect orientation via API or video metadata
-    const isVertical = await detectVerticalVideo(videoId);
-    
-    if (isVertical) {
-        container.className = 'video-container vertical';
-        iframe.height = '600';
-    } else {
-        container.className = 'video-container standard';
-        iframe.height = '300';
-    }
-    
-    iframe.src = `https://play.3speak.tv/embed?v=${videoId}&mode=iframe`;
+    iframe.src = `https://play.3speak.tv/embed?v=${author}/${permlink}&mode=iframe`;
     iframe.width = '100%';
+    iframe.height = '600'; // Default height, will auto-adjust
     iframe.frameBorder = '0';
     iframe.allowFullscreen = true;
+    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
     
     container.appendChild(iframe);
-}</code>
+}
+
+// That's it! The message listener handles everything automatically.</code>
             </div>
 
-            <h3 style="margin-top: 30px;">React Component Example</h3>
+            <h3 style="margin-top: 30px;">React/Next.js Component (Auto-Adjusting!)</h3>
             <div class="code-block">
-                <code>const ThreeSpeakPlayer = ({ 
-    videoId, 
-    layout = 'standard' // 'standard' | 'vertical'
-}) => {
-    const height = layout === 'vertical' ? '600' : '300';
-    const containerClass = `video-container ${layout}`;
+                <code>import { useEffect, useRef, useState } from 'react';
+
+const ThreeSpeakPlayer = ({ author, permlink, className = '' }) => {
+    const iframeRef = useRef(null);
+    const [isVertical, setIsVertical] = useState(false);
+    
+    useEffect(() => {
+        // Listen for player ready message
+        const handleMessage = (event) => {
+            if (event.data.type === '3speak-player-ready') {
+                // Check if this message is from our iframe
+                if (event.source === iframeRef.current?.contentWindow) {
+                    setIsVertical(event.data.isVertical);
+                    console.log(`Video ${author}/${permlink} is ${event.data.orientation}`);
+                }
+            }
+        };
+        
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, [author, permlink]);
+    
+    // Dynamic styling based on orientation
+    const containerClass = `video-container ${isVertical ? 'vertical' : 'horizontal'} ${className}`;
+    const iframeHeight = isVertical ? '800px' : '450px';
+    const maxWidth = isVertical ? '450px' : '800px';
     
     return (
-        &lt;div className={containerClass}&gt;
+        &lt;div className={containerClass} style={{ maxWidth, margin: '0 auto' }}&gt;
             &lt;iframe
-                src={`https://play.3speak.tv/embed?v=${videoId}&mode=iframe`}
+                ref={iframeRef}
+                src={`https://play.3speak.tv/embed?v=${author}/${permlink}&mode=iframe`}
                 width="100%"
-                height={height}
+                height={iframeHeight}
                 style={{ border: 'none', borderRadius: '8px' }}
                 allowFullScreen
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             /&gt;
         &lt;/div&gt;
     );
 };
 
-// Usage
-&lt;ThreeSpeakPlayer videoId="vempromundo/hkh2vzzf" layout="vertical" /&gt;</code>
+// Usage - No need to specify orientation!
+&lt;ThreeSpeakPlayer author="vempromundo" permlink="hkh2vzzf" /&gt;
+&lt;ThreeSpeakPlayer author="eddiespinod" permlink="xpztd24i" /&gt;</code>
             </div>
         </div>
 
@@ -714,24 +767,25 @@ const embeddedContent = content.replace(videoRegex, (match, subdomain, route, vi
 
             <div style="background: #1a3a5c; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #4a9eff;">
                 <strong style="color: #87ceeb;">💡 Implementation Checklist for 3speak Devs:</strong><br>
-                • ✅ <strong>Player already handles everything!</strong> Uses JW Player approach internally<br>
-                • ✅ Store video dimensions (width/height) in your database during upload<br>
-                • ✅ Detect orientation: <code>isVertical = height > width</code><br>
-                • ✅ Use iframe height: <strong>800px for vertical, 400px for horizontal</strong><br>
-                • ✅ Use container width: <strong>450px for vertical, 800px for horizontal</strong><br>
-                • ✅ Add CSS classes for styling: <code>.vertical-video-container</code><br>
-                • ✅ Test with <code>vempromundo/hkh2vzzf</code> (vertical) and <code>meno/1czchhmr</code> (horizontal)<br>
-                • ✅ Always include <code>&mode=iframe</code> for clean embeds
+                • ✅ <strong>NO database changes needed!</strong> Player reads dimensions from HLS manifest<br>
+                • ✅ <strong>ONE TIME setup:</strong> Add message event listener to your app (see examples above)<br>
+                • ✅ <strong>Embed iframe:</strong> Just use author/permlink - player auto-detects everything<br>
+                • ✅ <strong>Listen for message:</strong> Player sends <code>3speak-player-ready</code> with video dimensions<br>
+                • ✅ <strong>Adjust iframe:</strong> Use 800px height for vertical, 450px for horizontal<br>
+                • ✅ <strong>Style container:</strong> Use max-width 450px for vertical, 800px for horizontal<br>
+                • ✅ <strong>Test videos:</strong> <code>vempromundo/hkh2vzzf</code> (vertical), <code>meno/1czchhmr</code> (horizontal)<br>
+                • ✅ <strong>Embed mode:</strong> Always include <code>&mode=iframe</code> for clean display
             </div>
 
             <div style="background: #2d5a27; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #4caf50;">
-                <strong style="color: #a5d6a7;">🎉 SUCCESS: JW Player-Quality Video Playback Achieved!</strong><br>
-                The player now matches JW Player's elegant implementation:<br>
-                • Automatic aspect ratio detection from HLS metadata ✅<br>
-                • Fluid responsive design with <code>player.aspectRatio()</code> ✅<br>
-                • Simple, maintainable code (20 lines CSS vs 80+ before) ✅<br>
-                • Perfect display for horizontal AND vertical videos ✅<br>
-                <strong>Your frontend just needs to provide proper container dimensions!</strong>
+                <strong style="color: #a5d6a7;">🎉 COMPLETE: Production-Ready Embed System!</strong><br>
+                The player now offers the perfect integration experience:<br>
+                • <strong>Zero database changes</strong> - Works with existing schema ✅<br>
+                • <strong>Automatic detection</strong> - Player reads HLS metadata ✅<br>
+                • <strong>PostMessage API</strong> - Clean communication with frontend ✅<br>
+                • <strong>JW Player quality</strong> - 20 lines CSS, perfect video display ✅<br>
+                • <strong>Copy-paste ready</strong> - Examples for vanilla JS, React, Next.js ✅<br>
+                <strong>Frontend devs can integrate in under 10 minutes!</strong>
             </div>
         </div>
     </div>

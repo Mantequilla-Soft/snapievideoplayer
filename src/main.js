@@ -265,11 +265,11 @@ function handleAspectRatio() {
   }
   
   const isVertical = videoHeight > videoWidth;
+  const aspectRatio = `${videoWidth}:${videoHeight}`;
   
   console.log(`Video dimensions: ${videoWidth}x${videoHeight} → ${isVertical ? 'vertical' : 'horizontal'}`);
   
   // Dynamically set aspect ratio like JW Player does
-  const aspectRatio = `${videoWidth}:${videoHeight}`;
   player.aspectRatio(aspectRatio);
   
   // Add class for any additional styling needs
@@ -279,6 +279,22 @@ function handleAspectRatio() {
   } else {
     player.removeClass('vertical-video');
     console.log(`Set aspect ratio to ${aspectRatio} for horizontal video`);
+  }
+  
+  // 🚀 FRONTEND INTEGRATION: Send video dimensions to parent window (for iframe embedding)
+  // This allows frontends to dynamically adjust iframe size for vertical videos
+  if (window.parent !== window) {
+    const message = {
+      type: '3speak-player-ready',
+      isVertical: isVertical,
+      width: videoWidth,
+      height: videoHeight,
+      aspectRatio: videoWidth / videoHeight,
+      orientation: isVertical ? 'vertical' : (videoWidth === videoHeight ? 'square' : 'horizontal')
+    };
+    
+    window.parent.postMessage(message, '*');
+    console.log('📤 Sent video info to parent window:', message);
   }
 }
 
