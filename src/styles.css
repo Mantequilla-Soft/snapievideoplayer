@@ -114,6 +114,13 @@ h3 {
   max-height: 80vh !important;
 }
 
+/* Fix the snapie-player element for vertical videos */
+.player-wrapper.vertical-video #snapie-player {
+  position: relative !important; /* Allow natural sizing */
+  height: auto !important;
+  min-height: 400px !important;
+}
+
 
 
 /* Player Logo Overlay */

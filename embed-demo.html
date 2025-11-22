@@ -301,8 +301,8 @@
         <!-- Vertical Videos -->
         <div class="demo-section">
             <h2>6. 📱 Handling Vertical Videos</h2>
-            <p><strong>Philosophy:</strong> The 3speak player maintains a consistent 16:9 aspect ratio by default (like YouTube/Twitter). 
-            <strong>Your frontend controls the container size</strong> to handle different video orientations optimally.</p>
+            <p><strong>Philosophy:</strong> The 3speak player automatically detects and adapts to vertical videos! 
+            <strong>Horizontal videos use 16:9 containers, vertical videos expand naturally</strong> to show the full content without cropping.</p>
             
             <div style="background: #333; border-radius: 8px; padding: 20px; margin: 20px 0;">
                 <strong style="color: #4a9eff;">Demo Video:</strong> <code>vempromundo/hkh2vzzf</code> (Vertical content)
@@ -310,7 +310,7 @@
 
             <div class="comparison">
                 <div class="comparison-item">
-                    <h3>❌ Standard Container (Shows Letterboxing)</h3>
+                    <h3>📱 Short Container (Player Auto-Expands)</h3>
                     <div class="video-wrapper">
                         <iframe 
                             src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe" 
@@ -326,7 +326,7 @@
                 </div>
                 
                 <div class="comparison-item">
-                    <h3>✅ Taller Container (Better Experience)</h3>
+                    <h3>✅ Taller Container (Full Experience)</h3>
                     <div class="video-wrapper">
                         <iframe 
                             src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe" 
