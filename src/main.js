@@ -72,9 +72,7 @@ function initializePlayer() {
     updatePlayerState('Ready');
   });
 
-  player.on('loadedmetadata', function() {
-    handleVerticalVideo();
-  });
+
 
   player.on('play', function() {
     console.log('Video is playing');
@@ -242,45 +240,7 @@ async function loadVideoFromData(videoData) {
   console.log('Loaded video:', videoData);
 }
 
-// Handle vertical video optimization
-function handleVerticalVideo() {
-  if (!player) return;
-  
-  const videoElement = player.tech().el();
-  if (!videoElement) return;
-  
-  const videoWidth = videoElement.videoWidth;
-  const videoHeight = videoElement.videoHeight;
-  
-  if (videoWidth === 0 || videoHeight === 0) return;
-  
-  const aspectRatio = videoWidth / videoHeight;
-  const isVertical = aspectRatio < 1; // Height > Width = vertical
-  const isSquare = Math.abs(aspectRatio - 1) < 0.1; // Close to 1:1 ratio
-  
-  console.log(`Video dimensions: ${videoWidth}x${videoHeight}, aspect ratio: ${aspectRatio.toFixed(2)}`);
-  
-  const playerWrapper = document.querySelector('.player-wrapper');
-  const playerElement = document.getElementById('snapie-player');
-  
-  if (!playerWrapper || !playerElement) return;
-  
-  // Remove any existing classes
-  playerWrapper.classList.remove('vertical-video', 'square-video');
-  playerElement.classList.remove('vertical-video', 'square-video');
-  
-  if (isVertical) {
-    console.log('Detected vertical video - optimizing layout');
-    playerWrapper.classList.add('vertical-video');
-    playerElement.classList.add('vertical-video');
-  } else if (isSquare) {
-    console.log('Detected square video - optimizing layout');
-    playerWrapper.classList.add('square-video');
-    playerElement.classList.add('square-video');
-  } else {
-    console.log('Standard horizontal video detected');
-  }
-}
+
 
 // Update UI helpers
 function updateCurrentSource(sourceName) {

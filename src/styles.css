@@ -45,54 +45,22 @@ h3 {
   font-size: 1.3em;
 }
 
-/* Video Player Styles */
+/* Video Player Styles - Force 16:9 aspect ratio like YouTube */
 .player-wrapper {
   position: relative;
   width: 100%;
   margin-bottom: 30px;
+  aspect-ratio: 16 / 9; /* Force standard YouTube aspect ratio */
 }
 
 #snapie-player {
   width: 100%;
-  max-width: 100%;
+  height: 100%;
 }
 
-/* Vertical Video Optimization */
-.player-wrapper.vertical-video {
-  max-width: 600px; /* Limit width for vertical videos */
-  margin: 0 auto 30px auto; /* Center the player */
-}
-
-.player-wrapper.vertical-video #snapie-player {
-  max-height: 80vh; /* Limit height to 80% of viewport */
-}
-
-/* Square Video Optimization */
-.player-wrapper.square-video {
-  max-width: 700px; /* Reasonable size for square videos */
-  margin: 0 auto 30px auto; /* Center the player */
-}
-
-/* Mobile specific optimizations for vertical videos */
-@media (max-width: 768px) {
-  .player-wrapper.vertical-video {
-    max-width: 100%;
-  }
-  
-  .player-wrapper.vertical-video #snapie-player {
-    max-height: 70vh; /* More aggressive height limit on mobile */
-  }
-  
-  .player-wrapper.square-video {
-    max-width: 100%;
-  }
-}
-
-/* Portrait orientation - make vertical videos larger */
-@media (orientation: portrait) and (max-width: 768px) {
-  .player-wrapper.vertical-video #snapie-player {
-    max-height: 85vh; /* Use more screen real estate in portrait mode */
-  }
+/* Ensure video fits within the forced aspect ratio */
+.video-js .vjs-tech {
+  object-fit: contain; /* Scale video to fit within container while preserving aspect ratio */
 }
 
 /* Player Logo Overlay */
