@@ -45,16 +45,21 @@ h3 {
   font-size: 1.3em;
 }
 
-/* Video Player Styles - Force 16:9 aspect ratio like YouTube */
+/* Video Player Styles - Dynamic aspect ratio based on video content */
 .player-wrapper {
   position: relative !important;
   width: 100% !important;
   margin-bottom: 30px;
-  padding-top: 56.25% !important; /* 16:9 aspect ratio (9/16 = 0.5625) */
-  height: 0 !important; /* Height is controlled by padding */
+  height: auto !important;
+  aspect-ratio: 16 / 9 !important; /* Default 16:9, will change dynamically */
   display: block !important;
   overflow: hidden !important;
-  flex-shrink: 0 !important; /* Prevent flex containers from breaking aspect ratio */
+  flex-shrink: 0 !important;
+}
+
+/* Switch to vertical aspect ratio for vertical videos */
+.player-wrapper.vertical-video {
+  aspect-ratio: 9 / 16 !important; /* Vertical aspect ratio */
 }
 
 #snapie-player {
@@ -65,15 +70,15 @@ h3 {
   height: 100% !important;
 }
 
-/* Lock video-js player to the 16:9 wrapper */
+/* Lock video-js player to fill the dynamic wrapper */
 .player-wrapper .video-js {
   position: absolute !important;
   top: 0 !important;
   left: 0 !important;
   width: 100% !important;
   height: 100% !important;
-  min-height: 0 !important; /* Prevent Video.js from forcing internal min-height */
-  max-height: none !important; /* Prevent theme height limits */
+  min-height: 0 !important;
+  max-height: none !important;
 }
 
 /* Ensure video fits without stretching (letterboxing on sides) */
