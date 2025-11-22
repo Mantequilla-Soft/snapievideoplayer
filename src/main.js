@@ -72,8 +72,9 @@ function initializePlayer() {
     updatePlayerState('Ready');
   });
 
-  player.on('loadedmetadata', function() {
-    handleVerticalVideoDetection();
+  player.on('loadeddata', function() {
+    // Small timeout to ensure HLS variant is chosen and real dimensions available
+    setTimeout(handleVerticalVideoDetection, 50);
   });
 
 
@@ -250,12 +251,16 @@ async function loadVideoFromData(videoData) {
 function handleVerticalVideoDetection() {
   if (!player) return;
   
-  const video = player.el().querySelector('video');
-  if (!video || !video.videoWidth || !video.videoHeight) return;
+  // Use player.tech().el() to get the actual rendering video element (works with HLS/VHS)
+  const videoEl = player.tech().el();
+  if (!videoEl) return;
   
-  const isVertical = video.videoHeight > video.videoWidth;
+  const { videoWidth, videoHeight } = videoEl;
+  if (!videoWidth || !videoHeight) return;
   
-  console.log(`Video dimensions: ${video.videoWidth}x${video.videoHeight}, vertical: ${isVertical}`);
+  const isVertical = videoHeight > videoWidth;
+  
+  console.log(`Real dimensions: ${videoWidth}x${videoHeight} → vertical: ${isVertical}`);
   
   if (isVertical) {
     console.log('Detected vertical video - adding vertical-video class');
