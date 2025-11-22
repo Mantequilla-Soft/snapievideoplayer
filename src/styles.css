@@ -96,12 +96,14 @@ h3 {
 }
 
 .video-js.vertical-video .vjs-tech {
-  /* Key fix: Let video maintain natural aspect ratio */
+  /* Key fix: Center the video properly */
   object-fit: contain !important;
-  object-position: center !important;
+  object-position: center center !important; /* Force center positioning */
   width: auto !important; /* Auto width prevents stretching */
   height: auto !important; /* Let video determine its own height */
-  margin: 0 auto !important; /* Center horizontally */
+  position: relative !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important; /* Center horizontally */
   background-color: #000 !important;
 }
 

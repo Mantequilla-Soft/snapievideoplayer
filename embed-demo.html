@@ -306,8 +306,14 @@
 
             <div style="background: #d4471c; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #ff6b35;">
                 <strong style="color: #fff;">⚠️ CRITICAL FOR 3SPEAK DEVELOPERS:</strong><br>
-                <strong style="color: #ffeb3b;">Your frontend must provide taller containers for vertical videos</strong> or users will see cropped content!<br>
-                The player detects orientation internally, but <strong>you control the iframe height</strong>.
+                <strong style="color: #ffeb3b;">Use NARROW containers for vertical videos</strong> to avoid wasted space (black bars)!<br>
+                Wide containers show the complete video but with letterboxing. <strong>Narrow containers = better UX</strong>.
+            </div>
+
+            <div style="background: #1a4d72; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #2196f3;">
+                <strong style="color: #87ceeb;">💡 Why you see black bars:</strong><br>
+                Vertical videos (720x1280) in wide containers (800px) will always have side padding - this is <strong>correct behavior</strong>!<br>
+                Solution: Use <code>max-width: 350px</code> for vertical video containers (like TikTok/Instagram).
             </div>
             
             <div style="background: #333; border-radius: 8px; padding: 20px; margin: 20px 0;">
@@ -316,23 +322,7 @@
 
             <div class="comparison">
                 <div class="comparison-item">
-                    <h3>📱 Short Container (Player Auto-Expands)</h3>
-                    <div class="video-wrapper">
-                        <iframe 
-                            src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe" 
-                            width="100%" 
-                            height="300"
-                            frameborder="0"
-                            allowfullscreen>
-                        </iframe>
-                    </div>
-                    <div class="code-block">
-                        <code>height="300" /* Standard height */</code>
-                    </div>
-                </div>
-                
-                <div class="comparison-item">
-                    <h3>✅ Taller Container (Full Experience)</h3>
+                    <h3>📱 Wide Container (Shows Full Video + Letterboxing)</h3>
                     <div class="video-wrapper">
                         <iframe 
                             src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe" 
@@ -343,32 +333,59 @@
                         </iframe>
                     </div>
                     <div class="code-block">
-                        <code>height="600" /* Taller for vertical */</code>
+                        <code>/* Wide container - shows black bars but complete video */
+width="100%" height="600"</code>
+                    </div>
+                </div>
+                
+                <div class="comparison-item">
+                    <h3>✅ Narrow Container (Optimized for Vertical)</h3>
+                    <div class="video-wrapper" style="max-width: 350px; margin: 0 auto;">
+                        <iframe 
+                            src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe" 
+                            width="100%" 
+                            height="600"
+                            frameborder="0"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="code-block">
+                        <code>/* Narrow container - better space usage */
+max-width: 350px; 
+width="100%" height="600"</code>
                     </div>
                 </div>
             </div>
 
-            <h3 style="margin-top: 30px;">CSS Container Strategies</h3>
+            <h3 style="margin-top: 30px;">CSS Container Strategies (Fix for Space Usage)</h3>
             <div class="code-block">
                 <code>/* Standard container for horizontal/mixed content */
 .video-container.standard {
     max-width: 800px;
     margin: 20px auto;
-    aspect-ratio: 16 / 9;
 }
 
-/* Vertical container for portrait videos */
+/* 🎯 KEY: Narrow container for vertical videos - better space usage */
 .video-container.vertical {
-    max-width: 400px;
+    max-width: 350px; /* Much narrower for vertical content */
     margin: 20px auto; 
-    aspect-ratio: 9 / 16; /* Portrait ratio */
+    width: 100%;
 }
 
-/* Mobile-responsive */
+/* For mobile feeds - let vertical videos use more width */
 @media (max-width: 768px) {
     .video-container.vertical {
-        max-width: 100%;
+        max-width: 280px; /* Slightly wider on mobile */
     }
+}
+
+/* TikTok/Instagram style - very narrow vertical containers */
+.video-container.shorts {
+    max-width: 300px;
+    margin: 0 auto;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
 }</code>
             </div>
 
