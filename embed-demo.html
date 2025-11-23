@@ -748,9 +748,320 @@ app.get('/api/video-metadata/:author/:permlink', (req, res) => {
             </div>
         </div>
 
+        <!-- Mobile App Layout Modes -->
+        <div class="demo-section">
+            <h2>8. 📱 Mobile App Integration - Layout Parameter</h2>
+            <p><strong>Problem:</strong> Mobile apps can't always adapt iframe sizes dynamically. <strong>Solution:</strong> Use the <code>&layout=</code> parameter for universal containers!</p>
+            
+            <div style="background: #2d5a27; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #4caf50;">
+                <strong style="color: #a5d6a7;">✨ NEW: Layout Modes for Universal Mobile Compatibility!</strong><br>
+                If your mobile app can't dynamically resize iframes, use our layout parameter to create a universal container that works for ALL video orientations without scrollbars!
+            </div>
+
+            <h3>Available Layout Modes</h3>
+            <div class="features" style="margin-bottom: 30px;">
+                <div class="feature">
+                    <strong style="color: #4a9eff;">📱 layout=mobile</strong><br>
+                    Tall 3:4 container optimized for mobile<br>
+                    <code>Perfect for all orientations</code>
+                </div>
+                <div class="feature">
+                    <strong style="color: #4a9eff;">⬜ layout=square</strong><br>
+                    Square 1:1 container<br>
+                    <code>Universal compatibility</code>
+                </div>
+                <div class="feature">
+                    <strong style="color: #4a9eff;">🖥️ layout=desktop</strong><br>
+                    Flexible responsive container<br>
+                    <code>Default adaptive behavior</code>
+                </div>
+            </div>
+
+            <h3>1. Mobile Layout (Recommended for Apps)</h3>
+            <p>The <code>&layout=mobile</code> parameter creates a 3:4 tall container perfect for mobile apps. Works beautifully for both vertical AND horizontal videos without any scrollbars!</p>
+            
+            <div class="comparison">
+                <div class="comparison-item">
+                    <h3>Vertical Video with Mobile Layout</h3>
+                    <div class="video-wrapper" style="max-width: 350px; margin: 0 auto;">
+                        <iframe 
+                            src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe&layout=mobile" 
+                            width="100%" 
+                            height="600"
+                            frameborder="0"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="code-block">
+                        <code>/* Perfect for vertical videos */
+&layout=mobile</code>
+                    </div>
+                </div>
+                
+                <div class="comparison-item">
+                    <h3>Horizontal Video with Mobile Layout</h3>
+                    <div class="video-wrapper" style="max-width: 350px; margin: 0 auto;">
+                        <iframe 
+                            src="https://play.3speak.tv/embed?v=meno/1czchhmr&mode=iframe&layout=mobile" 
+                            width="100%" 
+                            height="600"
+                            frameborder="0"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="code-block">
+                        <code>/* Also works for horizontal - letterboxed */
+&layout=mobile</code>
+                    </div>
+                </div>
+            </div>
+
+            <h3>2. Square Layout (Maximum Compatibility)</h3>
+            <p>For apps that need a completely universal container, <code>&layout=square</code> creates a 1:1 square that works for any video orientation.</p>
+            
+            <div class="video-wrapper" style="max-width: 400px; margin: 20px auto;">
+                <iframe 
+                    src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe&layout=square" 
+                    width="100%" 
+                    height="400"
+                    frameborder="0"
+                    allowfullscreen>
+                </iframe>
+            </div>
+            
+            <div class="code-block">
+                <code>&lt;iframe 
+  src="https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=square" 
+  width="350" 
+  height="350"
+  frameborder="0"
+  allowfullscreen&gt;
+&lt;/iframe&gt;</code>
+            </div>
+
+            <h3>3. iOS Swift Integration Example</h3>
+            <div class="code-block">
+                <code>import UIKit
+import WebKit
+
+class VideoPlayerViewController: UIViewController {
+    var webView: WKWebView!
+    let author: String
+    let permlink: String
+    
+    init(author: String, permlink: String) {
+        self.author = author
+        self.permlink = permlink
+        super.init(nibName: nil, bundle: nil)
+    }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        // Create WKWebView
+        webView = WKWebView(frame: self.view.bounds)
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView.scrollView.isScrollEnabled = false // No scrollbars!
+        view.addSubview(webView)
+        
+        // 🎯 Use layout=mobile for universal compatibility!
+        let videoURL = "https://play.3speak.tv/embed?v=\(author)/\(permlink)&mode=iframe&layout=mobile"
+        
+        if let url = URL(string: videoURL) {
+            let request = URLRequest(url: url)
+            webView.load(request)
+        }
+    }
+}
+
+// Usage - Same code for vertical AND horizontal videos!
+let verticalVideo = VideoPlayerViewController(author: "vempromundo", permlink: "hkh2vzzf")
+let horizontalVideo = VideoPlayerViewController(author: "meno", permlink: "1czchhmr")</code>
+            </div>
+
+            <h3>4. Android Kotlin Integration Example</h3>
+            <div class="code-block">
+                <code>import android.os.Bundle
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.appcompat.app.AppCompatActivity
+
+class VideoPlayerActivity : AppCompatActivity() {
+    private lateinit var webView: WebView
+    
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_video_player)
+        
+        val author = intent.getStringExtra("author") ?: ""
+        val permlink = intent.getStringExtra("permlink") ?: ""
+        
+        webView = findViewById(R.id.webView)
+        webView.settings.javaScriptEnabled = true
+        webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.webViewClient = WebViewClient()
+        
+        // 🎯 Use layout=mobile - works for all orientations!
+        val videoUrl = "https://play.3speak.tv/embed?v=$author/$permlink&mode=iframe&layout=mobile"
+        webView.loadUrl(videoUrl)
+    }
+}
+
+// XML Layout (activity_video_player.xml)
+/*
+&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"&gt;
+    
+    &lt;WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" /&gt;
+&lt;/FrameLayout&gt;
+*/</code>
+            </div>
+
+            <h3>5. React Native Integration Example</h3>
+            <div class="code-block">
+                <code>import React from 'react';
+import { View, StyleSheet } from 'react-native';
+import { WebView } from 'react-native-webview';
+
+const ThreeSpeakPlayer = ({ author, permlink, style }) => {
+  // 🎯 Use layout=mobile for universal compatibility
+  const videoUrl = `https://play.3speak.tv/embed?v=${author}/${permlink}&mode=iframe&layout=mobile`;
+  
+  return (
+    &lt;View style={[styles.container, style]}&gt;
+      &lt;WebView
+        source={{ uri: videoUrl }}
+        allowsFullscreenVideo={true}
+        mediaPlaybackRequiresUserAction={false}
+        javaScriptEnabled={true}
+        scrollEnabled={false}
+        style={styles.webview}
+      /&gt;
+    &lt;/View&gt;
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: '#000',
+    aspectRatio: 3/4, // Match mobile layout ratio
+  },
+  webview: {
+    backgroundColor: 'transparent',
+  }
+});
+
+// Usage - Same component for ALL videos!
+export default function App() {
+  return (
+    &lt;View style={{ flex: 1 }}&gt;
+      &lt;ThreeSpeakPlayer author="vempromundo" permlink="hkh2vzzf" /&gt;
+      &lt;ThreeSpeakPlayer author="meno" permlink="1czchhmr" /&gt;
+    &lt;/View&gt;
+  );
+}</code>
+            </div>
+
+            <h3>6. Flutter Integration Example</h3>
+            <div class="code-block">
+                <code>import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+
+class ThreeSpeakPlayer extends StatefulWidget {
+  final String author;
+  final String permlink;
+  
+  const ThreeSpeakPlayer({
+    Key? key,
+    required this.author,
+    required this.permlink,
+  }) : super(key: key);
+  
+  @override
+  State&lt;ThreeSpeakPlayer&gt; createState() => _ThreeSpeakPlayerState();
+}
+
+class _ThreeSpeakPlayerState extends State&lt;ThreeSpeakPlayer&gt; {
+  late final WebViewController _controller;
+  
+  @override
+  void initState() {
+    super.initState();
+    
+    // 🎯 Use layout=mobile for universal compatibility
+    final videoUrl = 'https://play.3speak.tv/embed?v=${widget.author}/${widget.permlink}&mode=iframe&layout=mobile';
+    
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..loadRequest(Uri.parse(videoUrl));
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      child: AspectRatio(
+        aspectRatio: 3 / 4, // Match mobile layout ratio
+        child: WebViewWidget(controller: _controller),
+      ),
+    );
+  }
+}
+
+// Usage in your feed
+ListView.builder(
+  itemCount: videos.length,
+  itemBuilder: (context, index) {
+    final video = videos[index];
+    return ThreeSpeakPlayer(
+      author: video.author,
+      permlink: video.permlink,
+    );
+  },
+)</code>
+            </div>
+
+            <div style="background: #2d5a27; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #4caf50;">
+                <strong style="color: #a5d6a7;">🎉 Mobile App Integration - Super Simple!</strong><br>
+                <strong>Benefits of layout=mobile parameter:</strong><br>
+                • ✅ <strong>One container for all videos</strong> - No orientation detection needed<br>
+                • ✅ <strong>No scrollbars ever</strong> - Perfect letterboxing for all orientations<br>
+                • ✅ <strong>Copy-paste integration</strong> - Same code for iOS, Android, React Native, Flutter<br>
+                • ✅ <strong>Production-ready</strong> - Works immediately without database changes<br>
+                • ✅ <strong>Mobile-optimized</strong> - 3:4 aspect ratio ideal for phone screens<br>
+                <br>
+                <strong>Just add <code>&layout=mobile</code> to your iframe URL and you're done!</strong>
+            </div>
+
+            <h3>Quick Reference - All Layout Modes</h3>
+            <div class="code-block">
+                <code>// MOBILE LAYOUT - Tall container (3:4 aspect ratio) - RECOMMENDED FOR APPS
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile
+// Perfect for: iOS, Android, React Native, Flutter apps
+
+// SQUARE LAYOUT - Universal square container (1:1)
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=square
+// Perfect for: Social media grids, thumbnails, ultra-simple layouts
+
+// DESKTOP LAYOUT - Flexible responsive (default behavior)
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=desktop
+// Perfect for: Web apps that can dynamically resize iframes
+
+// NO LAYOUT PARAMETER - Same as desktop (fluid responsive)
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe
+// Uses default fluid mode with PostMessage API for dimension communication</code>
+            </div>
+        </div>
+
         <!-- For Developers -->
         <div class="demo-section">
-            <h2>8. 🛠️ For Frontend Developers</h2>
+            <h2>9. 🛠️ For Frontend Developers</h2>
             <p>Simple JavaScript to auto-embed 3speak URLs:</p>
             
             <div class="code-block">

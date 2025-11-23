@@ -140,7 +140,8 @@ function getUrlParams() {
   return {
     video: params.get('v'),
     type: window.location.pathname.includes('/embed') ? 'embed' : 'legacy',
-    mode: params.get('mode') // 'iframe' for minimal embedding UI
+    mode: params.get('mode'), // 'iframe' for minimal embedding UI
+    layout: params.get('layout') // 'mobile', 'square', or 'desktop' (default)
   };
 }
 
@@ -341,12 +342,18 @@ document.addEventListener('DOMContentLoaded', async function() {
   initializePlayer();
 
   // Get URL parameters
-  const { video, type, mode } = getUrlParams();
+  const { video, type, mode, layout } = getUrlParams();
   
   // Enable iframe mode if requested
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');
     console.log('Iframe mode enabled - minimal UI');
+  }
+  
+  // Apply layout mode for different display contexts
+  if (layout) {
+    document.body.classList.add(`layout-${layout}`);
+    console.log(`Layout mode: ${layout}`);
   }
   
   if (!video) {

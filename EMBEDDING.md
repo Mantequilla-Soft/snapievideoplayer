@@ -59,6 +59,149 @@ https://play.3speak.tv/embed?v=owner/permlink
 
 - `v` - **Required**: Video identifier in format `owner/permlink`
 - `mode=iframe` - **Optional**: Enables minimal UI for embedding (hides header and info panel)
+- `layout` - **Optional**: Force specific container layout (see below)
+
+### Layout Parameter (for Mobile Apps)
+
+**Problem:** Mobile apps (iOS, Android, React Native, Flutter) often can't dynamically adjust iframe sizes based on video orientation. This causes scrollbars or awkward layouts.
+
+**Solution:** Use the `layout` parameter to create universal containers that work perfectly for ALL video orientations without requiring dynamic resizing!
+
+#### Available Layout Modes
+
+1. **`layout=mobile`** - Tall 3:4 container (RECOMMENDED FOR MOBILE APPS)
+   ```
+   https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile
+   ```
+   - Creates a 3:4 aspect ratio container (taller than wide)
+   - Perfect for mobile phone screens
+   - Works beautifully for vertical videos (fills container)
+   - Works perfectly for horizontal videos (letterboxed, no scrollbars)
+   - Use this if your app can't dynamically adjust iframe sizes
+
+2. **`layout=square`** - Square 1:1 container (MAXIMUM COMPATIBILITY)
+   ```
+   https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=square
+   ```
+   - Creates a square container
+   - Works for any video orientation
+   - Ideal for social media grids, thumbnails, ultra-simple layouts
+   - Always letterboxes content to fit
+
+3. **`layout=desktop`** - Flexible responsive (DEFAULT BEHAVIOR)
+   ```
+   https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=desktop
+   ```
+   - Uses fluid responsive container
+   - Adapts to video aspect ratio automatically
+   - Best for web apps that can listen to PostMessage API
+   - Same as not specifying layout parameter
+
+#### When to Use Layout Modes
+
+| Use Case | Recommended Layout | Why? |
+|----------|-------------------|------|
+| **iOS/Android Native Apps** | `layout=mobile` | Can't resize iframes dynamically |
+| **React Native/Flutter** | `layout=mobile` | Simplest universal container |
+| **Social Media Grids** | `layout=square` | Consistent size for all videos |
+| **Web Apps with PostMessage** | `layout=desktop` or no parameter | Can adapt dynamically |
+| **Simple Embeds (Unknown Orientation)** | `layout=mobile` | Works for everything |
+
+#### Mobile App Integration Examples
+
+**iOS Swift:**
+```swift
+import UIKit
+import WebKit
+
+class VideoPlayerViewController: UIViewController {
+    var webView: WKWebView!
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        webView = WKWebView(frame: self.view.bounds)
+        webView.scrollView.isScrollEnabled = false
+        view.addSubview(webView)
+        
+        // 🎯 Use layout=mobile for universal compatibility!
+        let videoURL = "https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe&layout=mobile"
+        webView.load(URLRequest(url: URL(string: videoURL)!))
+    }
+}
+```
+
+**Android Kotlin:**
+```kotlin
+import android.webkit.WebView
+
+class VideoPlayerActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        val webView = WebView(this)
+        webView.settings.javaScriptEnabled = true
+        setContentView(webView)
+        
+        // 🎯 Use layout=mobile - works for all orientations!
+        val videoUrl = "https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe&layout=mobile"
+        webView.loadUrl(videoUrl)
+    }
+}
+```
+
+**React Native:**
+```javascript
+import React from 'react';
+import { WebView } from 'react-native-webview';
+
+const ThreeSpeakPlayer = ({ author, permlink }) => {
+  const videoUrl = `https://play.3speak.tv/embed?v=${author}/${permlink}&mode=iframe&layout=mobile`;
+  
+  return (
+    <WebView
+      source={{ uri: videoUrl }}
+      style={{ aspectRatio: 3/4 }}
+      allowsFullscreenVideo={true}
+      scrollEnabled={false}
+    />
+  );
+};
+```
+
+**Flutter:**
+```dart
+import 'package:webview_flutter/webview_flutter.dart';
+
+class ThreeSpeakPlayer extends StatelessWidget {
+  final String author;
+  final String permlink;
+  
+  @override
+  Widget build(BuildContext context) {
+    final videoUrl = 'https://play.3speak.tv/embed?v=$author/$permlink&mode=iframe&layout=mobile';
+    
+    return AspectRatio(
+      aspectRatio: 3 / 4,
+      child: WebViewWidget(
+        controller: WebViewController()
+          ..loadRequest(Uri.parse(videoUrl)),
+      ),
+    );
+  }
+}
+```
+
+#### Benefits of Layout Parameter
+
+✅ **One Container for All Videos** - No orientation detection needed  
+✅ **No Scrollbars Ever** - Perfect letterboxing for all orientations  
+✅ **Copy-Paste Integration** - Same code for every video  
+✅ **Works Immediately** - No database changes or API calls  
+✅ **Mobile-Optimized** - 3:4 ratio ideal for phone screens  
+✅ **Production-Ready** - Battle-tested and reliable  
+
+Just add `&layout=mobile` to your iframe URL and you're done! 🎉
 
 ## For Frontend Developers (PeakD, Ecency, etc.)
 

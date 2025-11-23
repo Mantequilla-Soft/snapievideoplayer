@@ -196,6 +196,49 @@ body.iframe-mode .player-wrapper {
   margin-bottom: 0;
 }
 
+/* Layout Modes - For Universal Mobile App Compatibility */
+
+/* Mobile Layout: Tall 3:4 container (optimized for vertical videos, works for horizontal too) */
+body.layout-mobile .player-wrapper {
+  position: relative;
+  width: 100%;
+  padding-bottom: 133.33%; /* 3:4 aspect ratio (taller than wide) */
+  height: 0;
+  max-height: none; /* Override default max-height */
+}
+
+body.layout-mobile .video-js {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Square Layout: 1:1 container (works universally for any orientation) */
+body.layout-square .player-wrapper {
+  position: relative;
+  width: 100%;
+  padding-bottom: 100%; /* 1:1 aspect ratio */
+  height: 0;
+  max-height: none;
+}
+
+body.layout-square .video-js {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Desktop Layout: Flexible responsive container (default behavior) */
+body.layout-desktop .player-wrapper {
+  /* Uses default fluid behavior - no forced aspect ratio */
+  width: 100%;
+  max-height: 100vh;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .container {
