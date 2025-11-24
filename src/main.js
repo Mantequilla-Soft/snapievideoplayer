@@ -204,7 +204,8 @@ function getUrlParams() {
     type: window.location.pathname.includes('/embed') ? 'embed' : 'legacy',
     mode: params.get('mode'), // 'iframe' for minimal embedding UI
     layout: params.get('layout'), // 'mobile', 'square', or 'desktop' (default)
-    debug: params.get('debug')
+    debug: params.get('debug'),
+    noscroll: params.get('noscroll') // '1' or 'true' to disable scrollbars
   };
 }
 
@@ -414,10 +415,10 @@ function showError(message) {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug } = getUrlParams();
+  const { video, type, mode, layout, debug, noscroll } = getUrlParams();
 
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
-  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug });
+  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll });
   
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');
@@ -430,6 +431,14 @@ document.addEventListener('DOMContentLoaded', async function() {
   } else {
     debugLog('No layout parameter provided');
   }
+  
+  // Apply no-scroll mode to prevent iframe scrollbars
+  if (noscroll === '1' || noscroll === 'true') {
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    debugLog('No-scroll mode enabled');
+  }
+  
   debugLog('Body class list before init', document.body.className);
   
   // 2. NOW: Initialize the player (it can now detect layout classes correctly)

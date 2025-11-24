@@ -1057,6 +1057,50 @@ https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=desktop
 https://play.3speak.tv/embed?v=author/permlink&mode=iframe
 // Uses default fluid mode with PostMessage API for dimension communication</code>
             </div>
+
+            <h3 style="margin-top: 30px;">🚫 Disabling Scrollbars - The <code>noscroll</code> Parameter</h3>
+            <div style="background: #1a3a5c; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #4a9eff;">
+                <strong style="color: #87ceeb;">Problem:</strong> Some embedding contexts (like constrained layouts or mobile apps) can show unwanted scrollbars inside the iframe.<br><br>
+                <strong style="color: #87ceeb;">Solution:</strong> Add <code>&noscroll=1</code> to completely disable all scrollbars within the player iframe.
+            </div>
+
+            <div class="code-block">
+                <code>// Standard embed - may show scrollbars in tight layouts
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile
+
+// No-scroll mode - guaranteed zero scrollbars
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile&noscroll=1
+
+// Works with any layout mode
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&noscroll=1
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=square&noscroll=1</code>
+            </div>
+
+            <h3 style="margin-top: 20px;">When to Use <code>noscroll</code></h3>
+            <div class="features" style="margin-bottom: 30px;">
+                <div class="feature">
+                    <strong style="color: #4a9eff;">✅ Mobile Apps</strong><br>
+                    Eliminate scrollbars in constrained WebView containers
+                </div>
+                <div class="feature">
+                    <strong style="color: #4a9eff;">✅ Fixed Layouts</strong><br>
+                    When your iframe has fixed dimensions
+                </div>
+                <div class="feature">
+                    <strong style="color: #4a9eff;">✅ Embedded Widgets</strong><br>
+                    Clean look in sidebars or cards
+                </div>
+                <div class="feature">
+                    <strong style="color: #4a9eff;">✅ Design Systems</strong><br>
+                    Maintain strict visual consistency
+                </div>
+            </div>
+
+            <div style="background: #2d5a27; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #4caf50;">
+                <strong style="color: #a5d6a7;">💡 Pro Tip:</strong> Combine <code>layout=mobile</code> + <code>noscroll=1</code> for the ultimate mobile app experience:<br>
+                <code style="color: #fff; background: #1a1a1a; padding: 5px 10px; border-radius: 4px; display: inline-block; margin-top: 10px;">https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile&noscroll=1</code><br><br>
+                This gives you a perfectly centered video in a tall container with absolutely zero scrollbars!
+            </div>
         </div>
 
         <!-- For Developers -->

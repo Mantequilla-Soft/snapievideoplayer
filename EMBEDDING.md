@@ -60,6 +60,7 @@ https://play.3speak.tv/embed?v=owner/permlink
 - `v` - **Required**: Video identifier in format `owner/permlink`
 - `mode=iframe` - **Optional**: Enables minimal UI for embedding (hides header and info panel)
 - `layout` - **Optional**: Force specific container layout (see below)
+- `noscroll=1` - **Optional**: Disables all scrollbars inside the iframe (perfect for fixed-size containers)
 
 ### Layout Parameter (for Mobile Apps)
 
@@ -437,6 +438,81 @@ Works in all modern browsers:
   </iframe>
   <figcaption>My awesome video on 3speak</figcaption>
 </figure>
+```
+
+## Disabling Scrollbars
+
+### The Problem
+
+When embedding videos in constrained layouts (mobile apps, fixed-size containers, sidebars), you may see unwanted scrollbars inside the iframe. This happens because:
+
+1. The iframe's internal document has its own scroll behavior
+2. Cross-origin iframes can't be styled from the parent page
+3. Layout mismatches between container and video can create overflow
+
+### The Solution: `noscroll` Parameter
+
+Add `&noscroll=1` to your embed URL to completely disable scrollbars:
+
+```html
+<!-- Without noscroll - may show scrollbars in constrained layouts -->
+<iframe 
+  src="https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile"
+  width="100%" 
+  height="600"
+  frameborder="0"
+  allowfullscreen>
+</iframe>
+
+<!-- With noscroll - guaranteed zero scrollbars -->
+<iframe 
+  src="https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile&noscroll=1"
+  width="100%" 
+  height="600"
+  frameborder="0"
+  allowfullscreen>
+</iframe>
+```
+
+### When to Use `noscroll`
+
+✅ **Mobile Apps** - WebView containers with fixed dimensions  
+✅ **Fixed Layouts** - When your iframe has explicit width/height  
+✅ **Embedded Widgets** - Sidebars, cards, or dashboard panels  
+✅ **Design Systems** - Maintaining strict visual consistency  
+
+### Best Practice for Mobile Apps
+
+For mobile apps, combine `layout=mobile` with `noscroll=1`:
+
+```
+https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=mobile&noscroll=1
+```
+
+This gives you:
+- ✅ Perfect 3:4 container for all video orientations
+- ✅ Automatic video centering
+- ✅ Zero scrollbars
+- ✅ Clean, professional appearance
+
+### TypeScript/React Example
+
+```typescript
+function fix3SpeakUrl(url: string): string {
+  if (!url.includes('play.3speak.tv/embed')) return url;
+
+  try {
+    const urlObj = new URL(url);
+    urlObj.searchParams.set('noscroll', '1');
+    return urlObj.toString();
+  } catch {
+    // fallback if URL is malformed
+    return url + (url.includes('?') ? '&' : '?') + 'noscroll=1';
+  }
+}
+
+// Use it:
+<iframe src={fix3SpeakUrl(originalUrl)} {...otherProps} />
 ```
 
 ## Need Help?

@@ -199,6 +199,10 @@ body.iframe-mode .player-wrapper {
 /* Layout Modes - For Universal Mobile App Compatibility */
 
 /* Mobile Layout: 3:4 container – Shorts style */
+body.layout-mobile {
+  overflow: hidden; /* Prevent body scrollbars in mobile layout */
+}
+
 body.layout-mobile .player-wrapper {
   position: relative;
   width: 100%;
@@ -232,6 +236,10 @@ body.layout-mobile .vjs-tech {
 }
 
 /* Square layout – same fix */
+body.layout-square {
+  overflow: hidden; /* Prevent body scrollbars in square layout */
+}
+
 body.layout-square .player-wrapper {
   position: relative;
   width: 100%;
