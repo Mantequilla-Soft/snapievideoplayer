@@ -100,12 +100,64 @@ function initializePlayer() {
         responsive: player.options_.responsive
       }
     });
+    
+    // PERFORMANCE: IPFS-optimized VHS buffer configuration
+    try {
+      const tech = player.tech({ IWillNotUseThisInPlugins: true });
+      if (tech && tech.vhs) {
+        const vhs = tech.vhs;
+        
+        // Assume decent bandwidth for faster startup
+        vhs.bandwidth = 2500000; // 2.5 Mbps
+        
+        // IPFS-optimized buffer settings
+        if (vhs.options_) {
+          vhs.options_ = {
+            ...vhs.options_,
+            // Aggressive buffering for IPFS jitter
+            maxBufferLength: 30,
+            maxBufferSize: 100 * 1000 * 1000, // 100MB buffer
+            maxBufferHole: 1.0,  // Tolerate 1s gaps (IPFS can be slow)
+            
+            // Faster startup
+            enableLowInitialPlaylist: true,
+            smoothQualityChange: true,
+            
+            // IPFS resilience - more retries and longer timeout
+            maxPlaylistRetries: 5,
+            timeout: 15000  // 15s for slow IPFS gateways
+          };
+          
+          debugLog('VHS buffer optimizations applied', vhs.options_);
+        }
+      }
+    } catch (error) {
+      console.warn('Could not apply VHS optimizations:', error);
+    }
+    
     updatePlayerState('Ready');
   });
 
   player.on('loadedmetadata', function() {
     // JW Player approach: Read dimensions and set aspect ratio dynamically
     handleAspectRatio();
+    
+    // PERFORMANCE: Start at mid-quality instead of lowest (like JW Player)
+    try {
+      const qualityLevels = player.qualityLevels();
+      if (qualityLevels && qualityLevels.length > 2) {
+        const midQuality = Math.floor(qualityLevels.length / 2);
+        
+        // Enable mid-quality level
+        for (let i = 0; i < qualityLevels.length; i++) {
+          qualityLevels[i].enabled = (i === midQuality);
+        }
+        
+        debugLog('Starting at mid-quality level:', midQuality, 'of', qualityLevels.length);
+      }
+    } catch (error) {
+      debugLog('Could not set mid-quality startup:', error);
+    }
 
     if (isDebugMode) {
       const tech = player.el_.querySelector('.vjs-tech');
@@ -161,6 +213,51 @@ function initializePlayer() {
     if (currentVideoData && !player.hasIncrementedView) {
       incrementViewCount(currentVideoData);
       player.hasIncrementedView = true;
+    }
+  });
+  
+  // PERFORMANCE: Aggressive quality upgrades on first play (JW Player style)
+  player.one('firstplay', function() {
+    debugLog('First play - enabling aggressive quality upgrades');
+    
+    try {
+      const tech = player.tech({ IWillNotUseThisInPlugins: true });
+      if (tech && tech.vhs && tech.vhs.selectPlaylist) {
+        const originalSelectPlaylist = tech.vhs.selectPlaylist.bind(tech.vhs);
+        
+        // Override playlist selection for aggressive upgrades
+        tech.vhs.selectPlaylist = function() {
+          const playlist = originalSelectPlaylist();
+          const vhs = tech.vhs;
+          
+          if (vhs && vhs.playlists && vhs.playlists.master) {
+            const levels = vhs.playlists.master.playlists;
+            const currentBandwidth = vhs.systemBandwidth || vhs.bandwidth || 2500000;
+            
+            // Upgrade aggressively: allow 1.5x bandwidth buffer
+            const targetBandwidth = currentBandwidth * 1.5;
+            const eligibleLevels = levels.filter(p => 
+              p.attributes && p.attributes.BANDWIDTH <= targetBandwidth
+            );
+            
+            if (eligibleLevels.length > 0) {
+              // Pick highest quality within 1.5x bandwidth
+              const upgraded = eligibleLevels[eligibleLevels.length - 1];
+              debugLog('Aggressive quality upgrade:', {
+                from: playlist ? playlist.attributes?.BANDWIDTH : 'unknown',
+                to: upgraded.attributes.BANDWIDTH,
+                currentBandwidth,
+                targetBandwidth
+              });
+              return upgraded;
+            }
+          }
+          
+          return playlist;
+        };
+      }
+    } catch (error) {
+      debugLog('Could not enable aggressive quality upgrades:', error);
     }
   });
 
@@ -236,6 +333,19 @@ async function fetchVideoData(videoParam, type) {
     }
     
     const data = await response.json();
+    
+    // PERFORMANCE: Preload HLS manifest to warm IPFS cache (fire & forget)
+    if (data.videoUrl) {
+      fetch(data.videoUrl, { 
+        method: 'HEAD',
+        cache: 'force-cache'
+      }).then(() => {
+        debugLog('HLS manifest preloaded from IPFS');
+      }).catch(err => {
+        debugLog('Manifest preload failed (non-critical):', err.message);
+      });
+    }
+    
     return data;
     
   } catch (error) {

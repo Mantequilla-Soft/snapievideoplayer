@@ -5,3 +5,6 @@ dist/
 .env
 .env.local
 .vscode/
+
+# Internal planning docs
+docs/AUDIO_PLAYER_DESIGN.md
