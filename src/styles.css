@@ -272,7 +272,7 @@ body.layout-square .vjs-tech {
 }
 
 /* Desktop / default → normal Video.js behavior */
-/* Desktop layout - YouTube-style 16:9 with letterboxing */
+/* Desktop layout - YouTube-style 16:9 with letterboxing/pillarboxing */
 body.layout-desktop .player-wrapper {
   position: relative;
   width: 100%;
@@ -293,6 +293,8 @@ body.layout-desktop .video-js {
   height: 100% !important;
 }
 
+/* FIX: Vertical videos in desktop layout need proper pillarboxing (black bars on sides) */
+/* Uses same centering trick as mobile/square layouts */
 body.layout-desktop .vjs-tech {
   position: absolute !important;
   top: 50% !important;
@@ -300,6 +302,8 @@ body.layout-desktop .vjs-tech {
   transform: translate(-50%, -50%) !important;
   width: auto !important;
   height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
   max-width: 100% !important;
   max-height: 100% !important;
   object-fit: contain !important;
