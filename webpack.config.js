@@ -45,6 +45,10 @@ module.exports = {
         {
           from: 'landing.html',
           to: 'landing.html'
+        },
+        {
+          from: 'autoplay-test.html',
+          to: 'autoplay-test.html'
         }
       ]
     })

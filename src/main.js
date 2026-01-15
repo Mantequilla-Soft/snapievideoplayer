@@ -16,6 +16,7 @@ if (!videojs.getPlugin('hlsQualitySelector')) {
 let player;
 let currentVideoData = null;
 let isDebugMode = false;
+let shouldAutoplay = false;
 
 function debugLog(...args) {
   if (isDebugMode) {
@@ -157,6 +158,19 @@ function initializePlayer() {
       }
     } catch (error) {
       debugLog('Could not set mid-quality startup:', error);
+    }
+
+    // Autoplay: try with sound first, fall back to muted
+    if (shouldAutoplay) {
+      debugLog('Autoplay: loadedmetadata fired, attempting play with sound');
+      player.muted(false);
+      player.play().catch(function(error) {
+        debugLog('Autoplay with sound failed, trying muted:', error.message);
+        player.muted(true);
+        player.play().catch(function(err) {
+          debugLog('Muted autoplay also failed:', err.message);
+        });
+      });
     }
 
     if (isDebugMode) {
@@ -313,7 +327,8 @@ function getUrlParams() {
     mode: params.get('mode'), // 'iframe' for minimal embedding UI
     layout: params.get('layout'), // 'mobile', 'square', or 'desktop' (default)
     debug: params.get('debug'),
-    noscroll: params.get('noscroll') // '1' or 'true' to disable scrollbars
+    noscroll: params.get('noscroll'), // '1' or 'true' to disable scrollbars
+    autoplay: params.get('autoplay') // '1' or 'true' to autoplay (muted)
   };
 }
 
@@ -597,10 +612,11 @@ function showError(message) {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug, noscroll } = getUrlParams();
+  const { video, type, mode, layout, debug, noscroll, autoplay } = getUrlParams();
 
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
-  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll });
+  shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
+  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, shouldAutoplay });
   
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');

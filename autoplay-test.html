@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autoplay Test - 3Speak Player</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 {
+            color: #e94560;
+        }
+        h2 {
+            color: #0f3460;
+            background: #eee;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .test-section {
+            margin: 30px 0;
+            padding: 20px;
+            background: #16213e;
+            border-radius: 10px;
+        }
+        .embed-container {
+            position: relative;
+            width: 100%;
+            padding-bottom: 56.25%;
+            margin: 15px 0;
+        }
+        .embed-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+            border-radius: 8px;
+        }
+        code {
+            background: #0f3460;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .note {
+            background: #e94560;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Autoplay Test</h1>
+
+    <div class="note">
+        <strong>Note:</strong> Autoplay requires the video to be muted (browser policy).
+        The video will start muted and you can unmute it after it starts playing.
+    </div>
+
+    <div class="test-section">
+        <h2>1. Autoplay WITH debug mode</h2>
+        <p>URL params: <code>autoplay=1&debug=1</code></p>
+        <p>Open browser console to see debug logs.</p>
+        <div class="embed-container">
+            <iframe
+                src="/watch?v=meno/1czchhmr&mode=iframe&autoplay=1&debug=1"
+                allow="autoplay; fullscreen"
+                allowfullscreen>
+            </iframe>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. Autoplay WITHOUT debug</h2>
+        <p>URL params: <code>autoplay=1</code></p>
+        <div class="embed-container">
+            <iframe
+                src="/watch?v=meno/1czchhmr&mode=iframe&autoplay=1"
+                allow="autoplay; fullscreen"
+                allowfullscreen>
+            </iframe>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. Normal (NO autoplay)</h2>
+        <p>URL params: none</p>
+        <p>This should NOT autoplay - click to play manually.</p>
+        <div class="embed-container">
+            <iframe
+                src="/watch?v=meno/1czchhmr&mode=iframe"
+                allow="autoplay; fullscreen"
+                allowfullscreen>
+            </iframe>
+        </div>
+    </div>
+
+    <h2>Direct URLs for testing:</h2>
+    <ul>
+        <li><a href="/watch?v=meno/1czchhmr&autoplay=1&debug=1" target="_blank">/watch?v=meno/1czchhmr&autoplay=1&debug=1</a></li>
+        <li><a href="/watch?v=meno/1czchhmr&autoplay=1" target="_blank">/watch?v=meno/1czchhmr&autoplay=1</a></li>
+        <li><a href="/watch?v=meno/1czchhmr" target="_blank">/watch?v=meno/1czchhmr</a> (no autoplay)</li>
+    </ul>
+</body>
+</html>
