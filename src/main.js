@@ -52,12 +52,26 @@ function initializePlayer() {
       hls: {
         enableLowInitialPlaylist: true,
         smoothQualityChange: true,
-        overrideNative: true
+        overrideNative: true,
+        // Aggressive buffering like JW Player
+        maxBufferLength: 60,              // Buffer up to 60 seconds ahead (JW default is 60)
+        maxMaxBufferLength: 120,          // Allow up to 120 seconds in buffer
+        maxBufferSize: 60 * 1000 * 1000,  // 60MB buffer size
+        maxBufferHole: 0.5,               // Max gap to skip over
+        highWaterLine: 30,                // Keep 30 seconds buffered
+        bandwidth: 5000000                // Start with 5Mbps bandwidth estimate
       },
       vhs: {
         enableLowInitialPlaylist: true,
         smoothQualityChange: true,
-        overrideNative: true
+        overrideNative: true,
+        // Aggressive buffering like JW Player
+        maxBufferLength: 60,              // Buffer up to 60 seconds ahead (JW default is 60)
+        maxMaxBufferLength: 120,          // Allow up to 120 seconds in buffer
+        maxBufferSize: 60 * 1000 * 1000,  // 60MB buffer size
+        maxBufferHole: 0.5,               // Max gap to skip over
+        highWaterLine: 30,                // Keep 30 seconds buffered
+        bandwidth: 5000000                // Start with 5Mbps bandwidth estimate
       }
     }
   });
