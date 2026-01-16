@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3speak Player Embedding Demo (LOCAL)</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 40px;
+        }
+
+        .demo-section {
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 40px;
+        }
+
+        .demo-section h2 {
+            margin-bottom: 20px;
+            color: #4a9eff;
+        }
+
+        .demo-section p {
+            color: #ccc;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        .video-wrapper-16-9 {
+            aspect-ratio: 16 / 9;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .video-wrapper-16-9 iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        .video-wrapper-3-4 {
+            aspect-ratio: 3 / 4;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .video-wrapper-3-4 iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        .video-wrapper-1-1 {
+            aspect-ratio: 1 / 1;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .video-wrapper-1-1 iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        .code-block {
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+            overflow-x: auto;
+        }
+
+        .code-block code {
+            color: #4af;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            white-space: pre;
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .comparison-item h3 {
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+
+        @media (max-width: 768px) {
+            .comparison {
+                grid-template-columns: 1fr;
+            }
+
+            h1 {
+                font-size: 1.8em;
+            }
+        }
+
+        .local-badge {
+            background: #ff6b6b;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>3speak Player Demo <span class="local-badge">LOCAL</span></h1>
+        <p class="subtitle">Testing local development build - all iframes point to localhost</p>
+
+        <!-- Desktop Layout Tests -->
+        <div class="demo-section">
+            <h2>1. Desktop Layout - YouTube-Style 16:9</h2>
+            <p>The <code>&layout=desktop</code> mode maintains a strict 16:9 aspect ratio. Vertical videos get pillarboxing (black bars on sides).</p>
+
+            <div class="comparison">
+                <div class="comparison-item">
+                    <h3>Vertical Video (with pillarboxing)</h3>
+                    <div class="video-wrapper-16-9">
+                        <iframe
+                            src="/watch?v=vaipraonde/560bdc59&mode=iframe&layout=desktop&debug=1"
+                            frameborder="0"
+                            allow="autoplay; fullscreen"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="code-block">
+                        <code>&layout=desktop
+/* Vertical videos get black bars on sides */</code>
+                    </div>
+                </div>
+
+                <div class="comparison-item">
+                    <h3>Horizontal Video (fills container)</h3>
+                    <div class="video-wrapper-16-9">
+                        <iframe
+                            src="/watch?v=meno/1czchhmr&mode=iframe&layout=desktop&debug=1"
+                            frameborder="0"
+                            allow="autoplay; fullscreen"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="code-block">
+                        <code>&layout=desktop
+/* Horizontal videos fill naturally */</code>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile Layout Tests -->
+        <div class="demo-section">
+            <h2>2. Mobile Layout - Tall Container (3:4)</h2>
+            <p>The <code>&layout=mobile</code> parameter creates a tall 3:4 container. Works for both vertical AND horizontal videos.</p>
+
+            <div class="comparison">
+                <div class="comparison-item">
+                    <h3>Vertical Video</h3>
+                    <div class="video-wrapper-3-4" style="max-width: 350px; margin: 0 auto;">
+                        <iframe
+                            src="/watch?v=vaipraonde/560bdc59&mode=iframe&layout=mobile&debug=1"
+                            frameborder="0"
+                            allow="autoplay; fullscreen"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="code-block">
+                        <code>&layout=mobile</code>
+                    </div>
+                </div>
+
+                <div class="comparison-item">
+                    <h3>Horizontal Video</h3>
+                    <div class="video-wrapper-3-4" style="max-width: 350px; margin: 0 auto;">
+                        <iframe
+                            src="/watch?v=meno/1czchhmr&mode=iframe&layout=mobile&debug=1"
+                            frameborder="0"
+                            allow="autoplay; fullscreen"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="code-block">
+                        <code>&layout=mobile
+/* Horizontal gets letterboxing */</code>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Square Layout Test -->
+        <div class="demo-section">
+            <h2>3. Square Layout - 1:1 Container</h2>
+            <p>The <code>&layout=square</code> creates a 1:1 square container.</p>
+
+            <div class="video-wrapper-1-1" style="max-width: 400px; margin: 20px auto;">
+                <iframe
+                    src="/watch?v=vaipraonde/560bdc59&mode=iframe&layout=square&debug=1"
+                    frameborder="0"
+                    allow="autoplay; fullscreen"
+                    allowfullscreen>
+                </iframe>
+            </div>
+            <div class="code-block">
+                <code>&layout=square</code>
+            </div>
+        </div>
+
+        <!-- Autoplay Test -->
+        <div class="demo-section">
+            <h2>4. Autoplay Test</h2>
+            <p>Test autoplay with the <code>&autoplay=1</code> parameter.</p>
+
+            <div class="video-wrapper-16-9" style="max-width: 800px; margin: 0 auto;">
+                <iframe
+                    src="/watch?v=meno/1czchhmr&mode=iframe&layout=desktop&autoplay=1&debug=1"
+                    frameborder="0"
+                    allow="autoplay; fullscreen"
+                    allowfullscreen>
+                </iframe>
+            </div>
+            <div class="code-block">
+                <code>&autoplay=1&layout=desktop</code>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -297,19 +297,110 @@ body.layout-desktop .video-js {
 }
 
 /* FIX: Vertical videos in desktop layout need proper pillarboxing (black bars on sides) */
-/* Uses same centering trick as mobile/square layouts */
 body.layout-desktop .vjs-tech {
   position: absolute !important;
-  top: 50% !important;
-  left: 50% !important;
-  transform: translate(-50%, -50%) !important;
-  width: auto !important;
-  height: auto !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  max-width: 100% !important;
-  max-height: 100% !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
   object-fit: contain !important;
+}
+
+/* Ensure control bar stays at bottom of container in desktop layout */
+body.layout-desktop .vjs-control-bar {
+  position: absolute !important;
+  bottom: 0 !important;
+  width: 100% !important;
+}
+
+/* Muted Autoplay Info Button */
+.vjs-muted-autoplay-info {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 100;
+  display: none;
+}
+
+.vjs-muted-autoplay-info.visible {
+  display: block;
+}
+
+.vjs-muted-autoplay-info button {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: bold;
+  font-style: italic;
+  font-family: Georgia, serif;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.vjs-muted-autoplay-info button:hover {
+  background: rgba(0, 0, 0, 0.7);
+  border-color: white;
+}
+
+.vjs-muted-autoplay-popup {
+  display: none;
+  position: absolute;
+  top: 32px;
+  right: 0;
+  width: 280px;
+  background: rgba(20, 20, 20, 0.95);
+  color: white;
+  padding: 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.vjs-muted-autoplay-popup.visible {
+  display: block;
+}
+
+.vjs-muted-autoplay-popup p {
+  margin: 0 0 10px 0;
+}
+
+.vjs-muted-autoplay-popup .browser-links {
+  font-size: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.vjs-muted-autoplay-popup .browser-links p {
+  margin: 0 0 6px 0;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.vjs-muted-autoplay-popup .browser-links a {
+  color: #6ea8fe;
+  text-decoration: none;
+  margin-right: 10px;
+  white-space: nowrap;
+}
+
+.vjs-muted-autoplay-popup .browser-links a:hover {
+  text-decoration: underline;
+}
+
+.vjs-muted-autoplay-popup .browser-links .chrome-strikeout {
+  text-decoration: line-through;
+  color: rgba(255, 255, 255, 0.4);
+  margin-right: 10px;
 }
 
 /* Replay Button Overlay */

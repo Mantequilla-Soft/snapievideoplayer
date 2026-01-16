@@ -45,6 +45,10 @@ module.exports = {
         {
           from: 'landing.html',
           to: 'landing.html'
+        },
+        {
+          from: 'embed-demo-local.html',
+          to: 'embed-demo-local.html'
         }
       ]
     })

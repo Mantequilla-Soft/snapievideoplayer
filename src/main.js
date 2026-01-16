@@ -16,6 +16,8 @@ if (!videojs.getPlugin('hlsQualitySelector')) {
 let player;
 let currentVideoData = null;
 let isDebugMode = false;
+let shouldAutoplay = false;
+let isChrome = false; // Detected once at startup for performance
 
 function debugLog(...args) {
   if (isDebugMode) {
@@ -24,8 +26,9 @@ function debugLog(...args) {
 }
 
 function initializePlayer() {
-  const isFixedLayout = document.body.classList.contains('layout-mobile') || 
-                        document.body.classList.contains('layout-square');
+  const isFixedLayout = document.body.classList.contains('layout-mobile') ||
+                        document.body.classList.contains('layout-square') ||
+                        document.body.classList.contains('layout-desktop');
 
   debugLog('initializePlayer()', {
     isFixedLayout,
@@ -175,6 +178,28 @@ function initializePlayer() {
       }
     } catch (error) {
       debugLog('Could not set mid-quality startup:', error);
+    }
+
+    // Autoplay: try with sound first, fall back to muted
+    // Skip autoplay entirely on Chrome (unreliable autoplay policy)
+    if (shouldAutoplay) {
+      if (isChrome) {
+        // Chrome: skip autoplay entirely (detected at startup)
+        debugLog('Autoplay: Chrome detected, skipping autoplay');
+      } else {
+        // Other browsers: try with sound first, fall back to muted
+        debugLog('Autoplay: attempting play with sound');
+        player.muted(false);
+        player.play().catch(function(error) {
+          debugLog('Autoplay with sound failed, trying muted:', error.message);
+          player.muted(true);
+          player.play().then(function() {
+            showMutedAutoplayInfo();
+          }).catch(function(err) {
+            debugLog('Muted autoplay also failed:', err.message);
+          });
+        });
+      }
     }
 
     if (isDebugMode) {
@@ -395,7 +420,8 @@ function getUrlParams() {
     mode: params.get('mode'), // 'iframe' for minimal embedding UI
     layout: params.get('layout'), // 'mobile', 'square', or 'desktop' (default)
     debug: params.get('debug'),
-    noscroll: params.get('noscroll') // '1' or 'true' to disable scrollbars
+    noscroll: params.get('noscroll'), // '1' or 'true' to disable scrollbars
+    autoplay: params.get('autoplay') // '1' or 'true' to autoplay (muted)
   };
 }
 
@@ -551,9 +577,10 @@ function handleAspectRatio() {
     orientation: isVertical ? 'vertical' : 'horizontal'
   });
   
-  // Check if we're in a fixed layout mode (mobile/square)
-  const hasFixedLayout = document.body.classList.contains('layout-mobile') || 
-                        document.body.classList.contains('layout-square');
+  // Check if we're in a fixed layout mode (mobile/square/desktop)
+  const hasFixedLayout = document.body.classList.contains('layout-mobile') ||
+                        document.body.classList.contains('layout-square') ||
+                        document.body.classList.contains('layout-desktop');
   
   // Only set aspect ratio dynamically if NOT in a fixed layout mode
   // Fixed layouts handle their own aspect ratios via CSS
@@ -622,6 +649,59 @@ function showReplayButton() {
   debugLog('Replay button shown');
 }
 
+// Show muted autoplay info button
+function showMutedAutoplayInfo() {
+  // Check if info already exists
+  let infoContainer = document.querySelector('.vjs-muted-autoplay-info');
+
+  if (!infoContainer) {
+    // Create info button container
+    infoContainer = document.createElement('div');
+    infoContainer.className = 'vjs-muted-autoplay-info';
+    infoContainer.innerHTML = `
+      <button type="button" aria-label="Sound info">i</button>
+      <div class="vjs-muted-autoplay-popup">
+        <p>Sound is off because your browser blocked autoplay with audio. Tap the speaker icon to unmute.</p>
+        <div class="browser-links">
+          <p>Allow autoplay with sound:</p>
+          <a href="https://support.mozilla.org/en-US/kb/block-autoplay" target="_blank" rel="noopener">Firefox</a>
+          <a href="https://browserhow.com/how-to-allow-or-block-sound-and-media-on-brave-browser/" target="_blank" rel="noopener">Brave</a>
+          <a href="https://www.microsoft.com/en-us/edge/learning-center/manage-autoplay" target="_blank" rel="noopener">Edge</a>
+          <span class="chrome-strikeout">Chrome</span>
+        </div>
+      </div>
+    `;
+
+    const btn = infoContainer.querySelector('button');
+    const popup = infoContainer.querySelector('.vjs-muted-autoplay-popup');
+
+    // Toggle popup on click
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      popup.classList.toggle('visible');
+    });
+
+    // Close popup when clicking elsewhere
+    document.addEventListener('click', function() {
+      popup.classList.remove('visible');
+    });
+
+    // Hide info when user unmutes
+    player.on('volumechange', function() {
+      if (!player.muted()) {
+        infoContainer.classList.remove('visible');
+      }
+    });
+
+    // Add to player
+    player.el().appendChild(infoContainer);
+  }
+
+  // Show the info button
+  infoContainer.classList.add('visible');
+  debugLog('Muted autoplay info shown');
+}
+
 // Update UI helpers
 function updateCurrentSource(sourceName) {
   const sourceElement = document.getElementById('current-source');
@@ -662,10 +742,15 @@ function showError(message) {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug, noscroll } = getUrlParams();
+  const { video, type, mode, layout, debug, noscroll, autoplay } = getUrlParams();
 
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
-  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll });
+  shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
+
+  // PERFORMANCE: Detect Chrome once at startup (avoid regex on every video load)
+  isChrome = /Chrome/.test(navigator.userAgent) && !/Edg|Brave/.test(navigator.userAgent);
+
+  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, shouldAutoplay, isChrome });
   
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');
