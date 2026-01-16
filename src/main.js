@@ -60,7 +60,10 @@ function initializePlayer() {
         maxBufferHole: 0.5,               // Max gap to skip over
         highWaterLine: 30,                // Keep 30 seconds buffered
         bandwidth: 10000000,              // INCREASED: Start with 10Mbps (more aggressive)
-        limitRenditionByPlayerDimensions: false  // Don't limit by player size
+        limitRenditionByPlayerDimensions: false,  // Don't limit by player size
+        // CRITICAL: Retry failed segment requests (IPFS can be flaky)
+        handleManifestRedirects: true,
+        withCredentials: false
       },
       vhs: {
         enableLowInitialPlaylist: false,  // CHANGED: Don't start with lowest quality
@@ -73,7 +76,10 @@ function initializePlayer() {
         maxBufferHole: 0.5,               // Max gap to skip over
         highWaterLine: 30,                // Keep 30 seconds buffered
         bandwidth: 10000000,              // INCREASED: Start with 10Mbps (more aggressive)
-        limitRenditionByPlayerDimensions: false  // Don't limit by player size
+        limitRenditionByPlayerDimensions: false,  // Don't limit by player size
+        // CRITICAL: Retry failed segment requests (IPFS can be flaky)
+        handleManifestRedirects: true,
+        withCredentials: false
       }
     }
   });
@@ -81,6 +87,49 @@ function initializePlayer() {
   debugLog('player created with options', {
     fluidOption: !isFixedLayout,
     responsiveOption: !isFixedLayout
+  });
+
+  // CRITICAL: Add XHR retry logic for IPFS gateway flakiness
+  player.ready(function() {
+    try {
+      const tech = player.tech({ IWillNotUseThisInPlugins: true });
+      if (tech && tech.vhs) {
+        // Wrap XHR to add retry logic
+        const originalXhrCreate = tech.vhs.xhr;
+        tech.vhs.xhr = function(options, callback) {
+          let attempts = 0;
+          const maxAttempts = 3;
+          
+          function attemptRequest() {
+            attempts++;
+            debugLog(`XHR attempt ${attempts}/${maxAttempts}:`, options.uri);
+            
+            const xhr = originalXhrCreate.call(this, options, function(error, response, body) {
+              // Retry on network errors or 5xx errors
+              if (error || (response && response.statusCode >= 500)) {
+                if (attempts < maxAttempts) {
+                  const delay = Math.pow(2, attempts - 1) * 500; // Exponential backoff
+                  debugLog(`Request failed, retrying in ${delay}ms...`, error);
+                  setTimeout(attemptRequest, delay);
+                  return;
+                }
+                debugLog(`Request failed after ${attempts} attempts`, error);
+              }
+              
+              callback(error, response, body);
+            });
+            
+            return xhr;
+          }
+          
+          return attemptRequest.call(this);
+        };
+        
+        debugLog('XHR retry logic installed');
+      }
+    } catch (e) {
+      debugLog('Could not install XHR retry logic:', e);
+    }
   });
 
   // Initialize quality selector plugin
@@ -298,9 +347,25 @@ function initializePlayer() {
     handleLogoVisibility();
   });
 
+  // Track stall count for gateway rotation
+  player.stallCount = 0;
+  player.lastStallTime = 0;
+  
   // Monitor buffering and force aggressive loading
   player.on('waiting', function() {
     debugLog('Player waiting/buffering');
+    
+    const now = Date.now();
+    const timeSinceLastStall = now - player.lastStallTime;
+    
+    // If stalling frequently (within 10 seconds), increment counter
+    if (timeSinceLastStall < 10000) {
+      player.stallCount++;
+      debugLog(`Stall count: ${player.stallCount}`);
+    } else {
+      player.stallCount = 1;
+    }
+    player.lastStallTime = now;
     
     // Try to force buffer ahead when stalling
     try {
@@ -310,13 +375,35 @@ function initializePlayer() {
           buffered: player.buffered(),
           currentTime: player.currentTime(),
           systemBandwidth: tech.vhs.systemBandwidth,
-          bandwidth: tech.vhs.bandwidth
+          bandwidth: tech.vhs.bandwidth,
+          stallCount: player.stallCount
         });
         
         // Force bandwidth estimation higher if we're stalling
         if (tech.vhs.bandwidth && tech.vhs.bandwidth < 5000000) {
           debugLog('Increasing bandwidth estimate to prevent stalling');
           tech.vhs.bandwidth = Math.max(tech.vhs.bandwidth * 2, 5000000);
+        }
+        
+        // After 3 stalls, try fallback gateway if available
+        if (player.stallCount >= 3 && currentVideoData && currentVideoData.videoUrlFallback && !player.triedFallback) {
+          console.warn('Too many stalls - switching to fallback gateway');
+          player.triedFallback = true;
+          player.stallCount = 0;
+          
+          player.src({
+            src: currentVideoData.videoUrlFallback,
+            type: 'application/x-mpegURL'
+          });
+          
+          // Resume from current position
+          const currentTime = player.currentTime();
+          player.one('loadedmetadata', function() {
+            player.currentTime(currentTime);
+            player.play();
+          });
+          
+          updatePlayerState('Switched to backup gateway');
         }
       }
     } catch (e) {
