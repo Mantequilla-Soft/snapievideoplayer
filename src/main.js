@@ -313,7 +313,7 @@ function initializePlayer() {
     
     // If error is CORS/network related and we have a fallback, try it
     if (currentVideoData && currentVideoData.videoUrlFallback && !player.triedFallback) {
-      console.log('Trying fallback gateway...');
+      debugLog('Trying fallback gateway...');
       player.triedFallback = true;
       player.src({
         src: currentVideoData.videoUrlFallback,
@@ -323,6 +323,88 @@ function initializePlayer() {
       updatePlayerState('Retrying with fallback gateway...');
     } else {
       updatePlayerState('Error');
+    }
+  });
+
+  // Listen for postMessage commands from parent window (for TV/iframe control)
+  window.addEventListener('message', function(event) {
+    if (!player) return;
+
+    const data = event.data;
+    if (!data) return;
+
+    // Handle different message formats that parent might send
+    const command = data.type || data.action || data.command;
+
+    debugLog('Received postMessage command:', command, data);
+
+    switch (command) {
+      case 'play':
+      case 'playVideo':
+        // Check if we have user activation (user gesture context)
+        var hasUserActivation = navigator.userActivation && navigator.userActivation.isActive;
+        debugLog('User activation status:', hasUserActivation);
+
+        if (hasUserActivation) {
+          // We have user gesture - try unmuted play
+          player.muted(false);
+          player.play().catch(function(error) {
+            debugLog('Play with sound failed despite user activation:', error.message);
+            // Fall back to muted
+            player.muted(true);
+            player.play().then(function() {
+              showMutedAutoplayInfo();
+            });
+          });
+        } else {
+          // No user gesture - try unmuted first, fall back to muted
+          player.muted(false);
+          player.play().catch(function(error) {
+            debugLog('Play with sound blocked, trying muted:', error.message);
+            player.muted(true);
+            player.play().then(function() {
+              showMutedAutoplayInfo();
+            }).catch(function(err) {
+              debugLog('Muted play also failed:', err.message);
+            });
+          });
+        }
+        break;
+      case 'pause':
+      case 'pauseVideo':
+        player.pause();
+        break;
+      case 'toggle-play':
+      case 'togglePlay':
+        if (player.paused()) {
+          player.play();
+        } else {
+          player.pause();
+        }
+        break;
+      case 'mute':
+        player.muted(true);
+        break;
+      case 'unmute':
+        player.muted(false);
+        break;
+      case 'toggleMute':
+        player.muted(!player.muted());
+        break;
+      case 'seek':
+        if (typeof data.time === 'number') {
+          player.currentTime(data.time);
+        }
+        break;
+      case 'seekForward':
+        player.currentTime(player.currentTime() + (data.seconds || 10));
+        break;
+      case 'seekBackward':
+        player.currentTime(player.currentTime() - (data.seconds || 10));
+        break;
+      default:
+        // Unknown command, ignore
+        break;
     }
   });
 
@@ -349,7 +431,7 @@ async function fetchVideoData(videoParam, type) {
     const endpoint = type === 'embed' ? '/api/embed' : '/api/watch';
     const url = `${endpoint}?v=${videoParam}`;
     
-    console.log(`Fetching video data from: ${url}`);
+    debugLog(`Fetching video data from: ${url}`);
     
     const response = await fetch(url);
     
@@ -415,7 +497,7 @@ async function incrementViewCount(videoData) {
     });
     
     if (response.ok) {
-      console.log('View count incremented');
+      debugLog('View count incremented');
     }
   } catch (error) {
     console.error('Error incrementing view count:', error);
@@ -438,7 +520,7 @@ async function loadVideoFromData(videoData) {
     debugLog('Setting thumbnail', videoData.thumbnail);
     player.poster(videoData.thumbnail);
   } else {
-    console.log('No thumbnail available for this video');
+    debugLog('No thumbnail available for this video');
   }
 
   // Set video sources with fallback
@@ -499,7 +581,7 @@ function handleAspectRatio() {
   }
   
   if (!videoWidth || !videoHeight) {
-    console.log('Video dimensions not yet available');
+    debugLog('Video dimensions not yet available');
     return;
   }
   
@@ -546,7 +628,7 @@ function handleAspectRatio() {
     };
     
     window.parent.postMessage(message, '*');
-    console.log('📤 Sent video info to parent window:', message);
+    debugLog('Sent video info to parent window:', message);
   }
 }
 
@@ -689,7 +771,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');
-    console.log('Iframe mode enabled - minimal UI');
+    debugLog('Iframe mode enabled - minimal UI');
   }
   
   if (layout) {
