@@ -873,9 +873,242 @@ https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=square&noscrol
             </div>
         </div>
 
+        <!-- External Controls Demo -->
+        <div class="demo-section">
+            <h2>8. 🎮 External Controls via postMessage API</h2>
+            <p>Control the player from outside the iframe using the postMessage API. Use <code>&controls=0</code> to hide the built-in controls and provide your own UI.</p>
+
+            <div style="display: flex; gap: 30px; align-items: flex-start; flex-wrap: wrap;">
+                <div style="max-width: 300px; flex-shrink: 0;">
+                    <div style="aspect-ratio: 3/4; background: #000; border-radius: 8px; overflow: hidden;">
+                        <iframe
+                            id="controlled-player"
+                            src="https://play.3speak.tv/embed?v=vempromundo/hkh2vzzf&mode=iframe&layout=mobile&controls=0"
+                            width="100%"
+                            height="100%"
+                            frameborder="0"
+                            allow="autoplay; fullscreen"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                </div>
+
+                <div style="flex: 1; min-width: 250px;">
+                    <h3 style="margin-bottom: 15px;">External Controls</h3>
+
+                    <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
+                        <button onclick="sendCommand('seekBackward')" style="padding: 12px 16px; font-size: 16px; cursor: pointer; background: #666; color: white; border: none; border-radius: 6px;" title="Back 10s">
+                            ⏪ 10s
+                        </button>
+                        <button id="play-pause-btn" onclick="togglePlayPause()" style="padding: 12px 24px; font-size: 16px; cursor: pointer; background: #4a9eff; color: white; border: none; border-radius: 6px; min-width: 100px;">
+                            ▶ Play
+                        </button>
+                        <button onclick="sendCommand('seekForward')" style="padding: 12px 16px; font-size: 16px; cursor: pointer; background: #666; color: white; border: none; border-radius: 6px;" title="Forward 10s">
+                            10s ⏩
+                        </button>
+                        <button onclick="sendCommand('toggleFullscreen')" style="padding: 12px 24px; font-size: 16px; cursor: pointer; background: #4a9eff; color: white; border: none; border-radius: 6px;">
+                            ⛶ Fullscreen
+                        </button>
+                    </div>
+
+                    <div style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; color: #888;">
+                            <span id="time-current">0:00</span>
+                            <span id="time-duration">0:00</span>
+                        </div>
+                        <div id="progress-bar" style="position: relative; height: 6px; background: #444; border-radius: 3px; cursor: pointer; width: 100%; max-width: 300px;">
+                            <div id="progress-fill" style="position: absolute; top: 0; left: 0; height: 100%; background: #4a9eff; border-radius: 3px; width: 0%; pointer-events: none;"></div>
+                            <div id="progress-handle" style="position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #fff; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,0.4); cursor: grab;"></div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                        <label style="white-space: nowrap; color: #ccc;">Volume: <span id="volume-display">100%</span></label>
+                        <input
+                            type="range"
+                            id="volume-slider"
+                            min="0"
+                            max="100"
+                            value="100"
+                            oninput="setVolume(this.value)"
+                            style="width: 150px; cursor: pointer;"
+                        >
+                        <button id="mute-btn" onclick="toggleMute()" style="padding: 6px 12px; font-size: 14px; cursor: pointer; background: #666; color: white; border: none; border-radius: 4px;">
+                            🔊
+                        </button>
+                    </div>
+
+                    <div class="code-block" style="margin-top: 20px;">
+                        <code>// Embed with hidden controls: &controls=0
+// &lt;iframe src="...?v=author/id&mode=iframe&controls=0"&gt;
+
+// Setup: Get iframe and create helper
+const iframe = document.getElementById('player');
+const send = (cmd, data = {}) =>
+  iframe.contentWindow.postMessage({ type: cmd, ...data }, '*');
+
+// PLAYBACK CONTROLS
+send('toggle-play');        // Toggle play/pause
+send('play');               // Start playing
+send('pause');              // Pause video
+send('toggleFullscreen');   // Toggle fullscreen
+
+// VOLUME CONTROLS
+send('setVolume', { volume: 0.5 });  // Set to 50%
+send('volumeUp', { step: 0.1 });     // +10%
+send('volumeDown', { step: 0.2 });   // -20%
+send('toggleMute');                   // Toggle mute
+send('mute');                         // Mute
+send('unmute');                       // Unmute
+
+// SEEKING
+send('seek', { time: 30 });           // Go to 30s
+send('seekForward', { seconds: 15 }); // +15s
+send('seekBackward', { seconds: 5 }); // -5s
+send('seekForward');                  // +10s (default)
+send('seekBackward');                 // -10s (default)
+
+// GET CURRENT STATE
+send('getState');  // Triggers '3speak-state' event
+
+// LISTEN FOR EVENTS
+window.addEventListener('message', (e) => {
+  const { type, currentTime, duration,
+          paused, muted, volume } = e.data;
+
+  if (type === '3speak-timeupdate') {
+    console.log(`${currentTime}s / ${duration}s`);
+  }
+  if (type === '3speak-play') console.log('Playing');
+  if (type === '3speak-pause') console.log('Paused');
+  if (type === '3speak-ended') console.log('Ended');
+});</code>
+                    </div>
+                </div>
+            </div>
+
+            <h3 style="margin-top: 30px;">Available Commands</h3>
+            <div style="background: #1a1a1a; border-radius: 8px; padding: 20px; margin: 20px 0; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; color: #ccc;">
+                    <tr style="border-bottom: 1px solid #444;">
+                        <th style="padding: 12px; text-align: left; color: #4a9eff;">Command</th>
+                        <th style="padding: 12px; text-align: left; color: #4a9eff;">Parameters</th>
+                        <th style="padding: 12px; text-align: left; color: #4a9eff;">Description</th>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">toggle-play</code></td>
+                        <td style="padding: 12px;">-</td>
+                        <td style="padding: 12px;">Toggle play/pause</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">play</code></td>
+                        <td style="padding: 12px; background: #252525;">-</td>
+                        <td style="padding: 12px; background: #252525;">Start playback</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">pause</code></td>
+                        <td style="padding: 12px;">-</td>
+                        <td style="padding: 12px;">Pause playback</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">toggleFullscreen</code></td>
+                        <td style="padding: 12px;">-</td>
+                        <td style="padding: 12px;">Toggle fullscreen mode</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">setVolume</code></td>
+                        <td style="padding: 12px; background: #252525;"><code>{ volume: 0-1 }</code></td>
+                        <td style="padding: 12px; background: #252525;">Set volume level (0 to 1)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">volumeUp</code></td>
+                        <td style="padding: 12px;"><code>{ step: 0.1 }</code></td>
+                        <td style="padding: 12px;">Increase volume by step (default 0.1)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">volumeDown</code></td>
+                        <td style="padding: 12px; background: #252525;"><code>{ step: 0.1 }</code></td>
+                        <td style="padding: 12px; background: #252525;">Decrease volume by step (default 0.1)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">mute</code></td>
+                        <td style="padding: 12px;">-</td>
+                        <td style="padding: 12px;">Mute audio</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">unmute</code></td>
+                        <td style="padding: 12px; background: #252525;">-</td>
+                        <td style="padding: 12px; background: #252525;">Unmute audio</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">seek</code></td>
+                        <td style="padding: 12px;"><code>{ time: seconds }</code></td>
+                        <td style="padding: 12px;">Seek to specific time in seconds</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">seekForward</code></td>
+                        <td style="padding: 12px; background: #252525;"><code>{ seconds: 10 }</code></td>
+                        <td style="padding: 12px; background: #252525;">Skip forward (default 10 seconds)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">seekBackward</code></td>
+                        <td style="padding: 12px;"><code>{ seconds: 10 }</code></td>
+                        <td style="padding: 12px;">Skip backward (default 10 seconds)</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">getState</code></td>
+                        <td style="padding: 12px; background: #252525;">-</td>
+                        <td style="padding: 12px; background: #252525;">Request current player state (triggers 3speak-state event)</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h3 style="margin-top: 30px;">Events from Player</h3>
+            <p style="color: #ccc; margin-bottom: 15px;">The player sends these events to the parent window via postMessage:</p>
+            <div style="background: #1a1a1a; border-radius: 8px; padding: 20px; margin: 20px 0; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; color: #ccc;">
+                    <tr style="border-bottom: 1px solid #444;">
+                        <th style="padding: 12px; text-align: left; color: #4a9eff;">Event</th>
+                        <th style="padding: 12px; text-align: left; color: #4a9eff;">Data</th>
+                        <th style="padding: 12px; text-align: left; color: #4a9eff;">Description</th>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">3speak-timeupdate</code></td>
+                        <td style="padding: 12px;"><code>currentTime, duration, paused, muted, volume</code></td>
+                        <td style="padding: 12px;">Sent ~4x per second during playback</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">3speak-durationchange</code></td>
+                        <td style="padding: 12px; background: #252525;"><code>duration</code></td>
+                        <td style="padding: 12px; background: #252525;">Sent when video duration becomes available</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">3speak-play</code></td>
+                        <td style="padding: 12px;">-</td>
+                        <td style="padding: 12px;">Sent when playback starts</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">3speak-pause</code></td>
+                        <td style="padding: 12px; background: #252525;">-</td>
+                        <td style="padding: 12px; background: #252525;">Sent when playback pauses</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 12px;"><code style="color: #4af;">3speak-ended</code></td>
+                        <td style="padding: 12px;">-</td>
+                        <td style="padding: 12px;">Sent when video ends</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 12px; background: #252525;"><code style="color: #4af;">3speak-state</code></td>
+                        <td style="padding: 12px; background: #252525;"><code>currentTime, duration, paused, muted, volume, ended</code></td>
+                        <td style="padding: 12px; background: #252525;">Response to getState command</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
         <!-- For Developers -->
         <div class="demo-section">
-            <h2>8. 🛠️ For Frontend Developers</h2>
+            <h2>9. 🛠️ For Frontend Developers</h2>
             <p>Simple JavaScript to auto-embed 3speak URLs:</p>
             
             <div class="code-block">
@@ -914,5 +1147,123 @@ const embeddedContent = content.replace(videoRegex, (match, subdomain, route, vi
             </div>
         </div>
     </div>
+
+    <script>
+        let videoDuration = 0;
+        let isSeeking = false;
+        let isPlaying = false;
+        let isMuted = false;
+
+        function sendCommand(command, data = {}) {
+            const iframe = document.getElementById('controlled-player');
+            iframe.contentWindow.postMessage({ type: command, ...data }, '*');
+        }
+
+        function togglePlayPause() {
+            sendCommand('toggle-play');
+        }
+
+        function updatePlayPauseButton() {
+            const btn = document.getElementById('play-pause-btn');
+            btn.innerHTML = isPlaying ? '⏸ Pause' : '▶ Play';
+        }
+
+        function toggleMute() {
+            sendCommand('toggleMute');
+        }
+
+        function updateMuteButton() {
+            const btn = document.getElementById('mute-btn');
+            btn.innerHTML = isMuted ? '🔇' : '🔊';
+        }
+
+        function setVolume(value) {
+            const volume = value / 100;
+            document.getElementById('volume-display').textContent = value + '%';
+            sendCommand('setVolume', { volume: volume });
+        }
+
+        function formatTime(seconds) {
+            if (!seconds || isNaN(seconds)) return '0:00';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function updateProgress(percent) {
+            document.getElementById('progress-fill').style.width = percent + '%';
+            document.getElementById('progress-handle').style.left = percent + '%';
+        }
+
+        // Progress bar drag handling
+        const progressBar = document.getElementById('progress-bar');
+        const progressHandle = document.getElementById('progress-handle');
+
+        function seekFromEvent(e) {
+            const rect = progressBar.getBoundingClientRect();
+            const percent = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+            updateProgress(percent);
+            if (videoDuration > 0) {
+                const time = (percent / 100) * videoDuration;
+                sendCommand('seek', { time: time });
+            }
+        }
+
+        progressBar.addEventListener('mousedown', (e) => {
+            isSeeking = true;
+            progressHandle.style.cursor = 'grabbing';
+            seekFromEvent(e);
+
+            const onMove = (e) => seekFromEvent(e);
+            const onUp = () => {
+                isSeeking = false;
+                progressHandle.style.cursor = 'grab';
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        // Listen for messages from the player
+        window.addEventListener('message', function(event) {
+            const data = event.data;
+            if (!data || !data.type) return;
+
+            switch (data.type) {
+                case '3speak-timeupdate':
+                    if (!isSeeking && data.duration > 0) {
+                        videoDuration = data.duration;
+                        const progress = (data.currentTime / data.duration) * 100;
+                        updateProgress(progress);
+                        document.getElementById('time-current').textContent = formatTime(data.currentTime);
+                        document.getElementById('time-duration').textContent = formatTime(data.duration);
+                        if (isPlaying !== !data.paused) {
+                            isPlaying = !data.paused;
+                            updatePlayPauseButton();
+                        }
+                        if (isMuted !== data.muted) {
+                            isMuted = data.muted;
+                            updateMuteButton();
+                        }
+                    }
+                    break;
+                case '3speak-durationchange':
+                    videoDuration = data.duration;
+                    document.getElementById('time-duration').textContent = formatTime(data.duration);
+                    break;
+                case '3speak-play':
+                    isPlaying = true;
+                    updatePlayPauseButton();
+                    break;
+                case '3speak-pause':
+                case '3speak-ended':
+                    isPlaying = false;
+                    updatePlayPauseButton();
+                    break;
+            }
+        });
+    </script>
 </body>
 </html>

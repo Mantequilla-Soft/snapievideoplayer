@@ -17,6 +17,7 @@ let player;
 let currentVideoData = null;
 let isDebugMode = false;
 let shouldAutoplay = false;
+let shouldShowControls = true; // Controls visible by default
 let isChrome = false; // Detected once at startup for performance
 
 function debugLog(...args) {
@@ -58,7 +59,7 @@ function initializePlayer() {
   debugLog('Buffer settings', { isMac, isSafari, platform: navigator.platform, bufferSettings });
 
   player = videojs('snapie-player', {
-    controls: true,
+    controls: shouldShowControls,
     autoplay: false,
     preload: 'auto',
     fluid: !isFixedLayout,        // DISABLE fluid in mobile/square layouts
@@ -340,14 +341,14 @@ function initializePlayer() {
   // Track stall count for gateway rotation
   player.stallCount = 0;
   player.lastStallTime = 0;
-  
+
   // Monitor buffering and manage buffer cleanup (especially important for Safari)
   player.on('waiting', function() {
     debugLog('Player waiting/buffering');
-    
+
     const now = Date.now();
     const timeSinceLastStall = now - player.lastStallTime;
-    
+
     // If stalling frequently (within 10 seconds), increment counter
     if (timeSinceLastStall < 10000) {
       player.stallCount++;
@@ -356,7 +357,7 @@ function initializePlayer() {
       player.stallCount = 1;
     }
     player.lastStallTime = now;
-    
+
     // Try to force buffer ahead when stalling
     try {
       const tech = player.tech({ IWillNotUseThisInPlugins: true });
@@ -368,15 +369,15 @@ function initializePlayer() {
           bandwidth: tech.vhs.bandwidth,
           stallCount: player.stallCount
         });
-        
+
         // Mac OS: Aggressive buffer cleanup to avoid quota errors (all browsers on Mac)
-        const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) || 
+        const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) ||
                       /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
         if (isMac && tech.vhs.sourceUpdater_) {
           try {
             const currentTime = player.currentTime();
             const sourceUpdater = tech.vhs.sourceUpdater_;
-            
+
             // Remove old buffered data (keep only 10 seconds behind current time)
             if (currentTime > 10) {
               debugLog('Mac OS: Cleaning old buffer to prevent quota errors');
@@ -387,31 +388,31 @@ function initializePlayer() {
             debugLog('Could not clean buffer:', e);
           }
         }
-        
+
         // Force bandwidth estimation higher if we're stalling (but not on Mac)
         if (!isMac && tech.vhs.bandwidth && tech.vhs.bandwidth < 5000000) {
           debugLog('Increasing bandwidth estimate to prevent stalling');
           tech.vhs.bandwidth = Math.max(tech.vhs.bandwidth * 2, 5000000);
         }
-        
+
         // After 3 stalls, try fallback gateway if available
         if (player.stallCount >= 3 && currentVideoData && currentVideoData.videoUrlFallback && !player.triedFallback) {
           console.warn('Too many stalls - switching to fallback gateway');
           player.triedFallback = true;
           player.stallCount = 0;
-          
+
           player.src({
             src: currentVideoData.videoUrlFallback,
             type: 'application/x-mpegURL'
           });
-          
+
           // Resume from current position
           const currentTime = player.currentTime();
           player.one('loadedmetadata', function() {
             player.currentTime(currentTime);
             player.play();
           });
-          
+
           updatePlayerState('Switched to backup gateway');
         }
       }
@@ -419,25 +420,25 @@ function initializePlayer() {
       debugLog('Could not access VHS tech:', e);
     }
   });
-  
+
   // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
   // This applies to ALL browsers on Mac (Safari, Chrome, Firefox, etc.)
   player.on('timeupdate', function() {
-    const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) || 
+    const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) ||
                   /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
     if (!isMac) return;
-    
+
     // Only clean every 5 seconds
     const currentTime = player.currentTime();
     if (!player.lastBufferCleanTime || currentTime - player.lastBufferCleanTime > 5) {
       player.lastBufferCleanTime = currentTime;
-      
+
       try {
         const tech = player.tech({ IWillNotUseThisInPlugins: true });
         if (tech && tech.vhs && tech.vhs.sourceUpdater_ && currentTime > 15) {
           const sourceUpdater = tech.vhs.sourceUpdater_;
           const cleanupPoint = currentTime - 10; // Keep 10 seconds behind
-          
+
           debugLog('Mac OS: Periodic buffer cleanup', { currentTime, cleanupPoint });
           sourceUpdater.remove('video', 0, cleanupPoint);
           sourceUpdater.remove('audio', 0, cleanupPoint);
@@ -445,6 +446,55 @@ function initializePlayer() {
       } catch (e) {
         // Silently fail buffer cleanup
       }
+    }
+  });
+
+  // Send time updates to parent window for external timeline control
+  // Throttle to ~4 updates per second to avoid flooding
+  let lastTimeUpdate = 0;
+  player.on('timeupdate', function() {
+    if (window.parent === window) return; // Not in iframe
+
+    const now = Date.now();
+    if (now - lastTimeUpdate < 250) return; // Throttle
+    lastTimeUpdate = now;
+
+    window.parent.postMessage({
+      type: '3speak-timeupdate',
+      currentTime: player.currentTime(),
+      duration: player.duration(),
+      paused: player.paused(),
+      muted: player.muted(),
+      volume: player.volume()
+    }, '*');
+  });
+
+  // Send duration when it becomes available
+  player.on('durationchange', function() {
+    if (window.parent === window) return;
+
+    window.parent.postMessage({
+      type: '3speak-durationchange',
+      duration: player.duration()
+    }, '*');
+  });
+
+  // Send play/pause state changes to parent window
+  player.on('play', function() {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: '3speak-play' }, '*');
+    }
+  });
+
+  player.on('pause', function() {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: '3speak-pause' }, '*');
+    }
+  });
+
+  player.on('ended', function() {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: '3speak-ended' }, '*');
     }
   });
 
@@ -530,10 +580,19 @@ function initializePlayer() {
 
   // Listen for postMessage commands from parent window (for TV/iframe control)
   window.addEventListener('message', function(event) {
-    if (!player) return;
+    // Always log ALL incoming messages for debugging
+    console.log('[3Speak Player] Received postMessage from:', event.origin, 'data:', event.data);
+
+    if (!player) {
+      console.log('[3Speak Player] Player not ready, ignoring message');
+      return;
+    }
 
     const data = event.data;
-    if (!data) return;
+    if (!data) {
+      console.log('[3Speak Player] No data in message, ignoring');
+      return;
+    }
 
     // Handle different message formats that parent might send
     const command = data.type || data.action || data.command;
@@ -604,6 +663,68 @@ function initializePlayer() {
       case 'seekBackward':
         player.currentTime(player.currentTime() - (data.seconds || 10));
         break;
+      case 'toggleFullscreen':
+      case 'toggle-fullscreen':
+        if (player.isFullscreen()) {
+          player.exitFullscreen();
+        } else {
+          player.requestFullscreen();
+        }
+        break;
+      case 'enterFullscreen':
+      case 'enter-fullscreen':
+        if (!player.isFullscreen()) {
+          player.requestFullscreen();
+        }
+        break;
+      case 'exitFullscreen':
+      case 'exit-fullscreen':
+        if (player.isFullscreen()) {
+          player.exitFullscreen();
+        }
+        break;
+      case 'setVolume':
+      case 'set-volume':
+        if (typeof data.volume === 'number') {
+          // Clamp volume between 0 and 1
+          var vol = Math.max(0, Math.min(1, data.volume));
+          player.volume(vol);
+          // Unmute if setting volume > 0
+          if (vol > 0 && player.muted()) {
+            player.muted(false);
+          }
+        }
+        break;
+      case 'volumeUp':
+      case 'volume-up':
+        var currentVol = player.volume();
+        var stepUp = data.step || 0.1;
+        player.volume(Math.min(1, currentVol + stepUp));
+        if (player.muted()) {
+          player.muted(false);
+        }
+        break;
+      case 'volumeDown':
+      case 'volume-down':
+        var currentVolDown = player.volume();
+        var stepDown = data.step || 0.1;
+        player.volume(Math.max(0, currentVolDown - stepDown));
+        break;
+      case 'getState':
+      case 'get-state':
+        // Return current player state to parent
+        if (window.parent !== window) {
+          window.parent.postMessage({
+            type: '3speak-state',
+            currentTime: player.currentTime(),
+            duration: player.duration(),
+            paused: player.paused(),
+            muted: player.muted(),
+            volume: player.volume(),
+            ended: player.ended()
+          }, '*');
+        }
+        break;
       default:
         // Unknown command, ignore
         break;
@@ -623,7 +744,8 @@ function getUrlParams() {
     layout: params.get('layout'), // 'mobile', 'square', or 'desktop' (default)
     debug: params.get('debug'),
     noscroll: params.get('noscroll'), // '1' or 'true' to disable scrollbars
-    autoplay: params.get('autoplay') // '1' or 'true' to autoplay (muted)
+    autoplay: params.get('autoplay'), // '1' or 'true' to autoplay (muted)
+    controls: params.get('controls') // '0' or 'false' to hide controls
   };
 }
 
@@ -997,15 +1119,17 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug, noscroll, autoplay } = getUrlParams();
+  const { video, type, mode, layout, debug, noscroll, autoplay, controls } = getUrlParams();
 
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
   shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
+  // Controls are shown by default, hide only if explicitly set to '0' or 'false'
+  shouldShowControls = !['0', 'false', 'no'].includes((controls || '').toLowerCase());
 
   // PERFORMANCE: Detect Chrome once at startup (avoid regex on every video load)
   isChrome = /Chrome/.test(navigator.userAgent) && !/Edg|Brave/.test(navigator.userAgent);
 
-  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, shouldAutoplay, isChrome });
+  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, controls, shouldAutoplay, shouldShowControls, isChrome });
   
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');
