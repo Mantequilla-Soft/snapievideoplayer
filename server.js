@@ -101,18 +101,18 @@ function transformIPFSUrl(ipfsUrl, useFallback = false) {
  */
 function getVideoUrls(ipfsUrl) {
   const gateways = {
-    cdn: 'https://ipfs-3speak.b-cdn.net/ipfs',      // BunnyCDN IPFS (fastest, cached)
-    supernode: 'https://ipfs.3speak.tv/ipfs',        // Supernode (direct IPFS)
-    hotnode: 'https://hotipfs-1.3speak.tv/ipfs',     // Hotnode (future primary)
-    audionode: 'https://ipfs-audio.3speak.tv/ipfs'   // Audionode (backup)
+    hotcdn: 'https://hotipfs-3speak.b-cdn.net/ipfs',   // BunnyCDN Hotnode (primary)
+    cdn: 'https://ipfs-3speak.b-cdn.net/ipfs',         // BunnyCDN IPFS (fallback)
+    supernode: 'https://ipfs.3speak.tv/ipfs',          // Supernode (direct IPFS)
+    audionode: 'https://ipfs-audio.3speak.tv/ipfs'     // Audionode (backup)
   };
   
   if (ipfsUrl.startsWith('ipfs://')) {
     const cidPath = ipfsUrl.replace('ipfs://', '');
     return {
-      primary: `${gateways.cdn}/${cidPath}`,
-      fallback1: `${gateways.supernode}/${cidPath}`,
-      fallback2: `${gateways.hotnode}/${cidPath}`,
+      primary: `${gateways.hotcdn}/${cidPath}`,
+      fallback1: `${gateways.cdn}/${cidPath}`,
+      fallback2: `${gateways.supernode}/${cidPath}`,
       fallback3: `${gateways.audionode}/${cidPath}`
     };
   }
