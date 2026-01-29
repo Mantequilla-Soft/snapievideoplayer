@@ -397,7 +397,7 @@ function initializePlayer() {
 
         // After 3 stalls, try fallback gateway if available
         if (player.stallCount >= 3 && currentVideoData && currentVideoData.videoUrlFallback && !player.triedFallback) {
-          console.warn('Too many stalls - switching to fallback gateway');
+          console.warn('[3Speak Player] Too many stalls - switching to fallback gateway:', currentVideoData.videoUrlFallback);
           player.triedFallback = true;
           player.stallCount = 0;
 
@@ -545,7 +545,7 @@ function initializePlayer() {
       
       // First, try fallback gateway - might be corrupted segments on this gateway
       if (currentVideoData && currentVideoData.videoUrlFallback && !player.triedFallback) {
-        console.log('⚠️ Trying fallback gateway (might fix corrupted segments)...');
+        console.log('[3Speak Player] MEDIA_ERR_DECODE - Trying fallback gateway:', currentVideoData.videoUrlFallback);
         player.triedFallback = true;
         player.src({
           src: currentVideoData.videoUrlFallback,
@@ -566,6 +566,7 @@ function initializePlayer() {
     // If error is CORS/network related and we have a fallback, try it
     if (currentVideoData && currentVideoData.videoUrlFallback && !player.triedFallback) {
       debugLog('Trying fallback gateway...');
+      console.log('[3Speak Player] Network/CORS error - Trying fallback gateway:', currentVideoData.videoUrlFallback);
       player.triedFallback = true;
       player.src({
         src: currentVideoData.videoUrlFallback,
@@ -576,6 +577,16 @@ function initializePlayer() {
     } else {
       updatePlayerState('Error');
     }
+  });
+
+  // Log when player starts loading a source
+  player.on('loadstart', function() {
+    console.log('[3Speak Player] Loadstart - Current source:', player.currentSrc());
+  });
+
+  // Log when data is loaded
+  player.on('loadeddata', function() {
+    console.log('[3Speak Player] Loaded successfully - Source:', player.currentSrc());
   });
 
   // Listen for postMessage commands from parent window (for TV/iframe control)
@@ -824,12 +835,15 @@ async function loadVideoFromData(videoData) {
     }
   ];
   
+  console.log('[3Speak Player] Primary video URL:', videoData.videoUrl);
+  
   // Add fallback chain: CDN -> Supernode -> Hotnode -> Audionode
   if (videoData.videoUrlFallback1 && videoData.videoUrlFallback1 !== videoData.videoUrl) {
     sources.push({
       src: videoData.videoUrlFallback1,
       type: 'application/x-mpegURL'
     });
+    console.log('[3Speak Player] Fallback1 video URL:', videoData.videoUrlFallback1);
   }
   
   if (videoData.videoUrlFallback2 && videoData.videoUrlFallback2 !== videoData.videoUrl) {
@@ -837,6 +851,7 @@ async function loadVideoFromData(videoData) {
       src: videoData.videoUrlFallback2,
       type: 'application/x-mpegURL'
     });
+    console.log('[3Speak Player] Fallback2 video URL:', videoData.videoUrlFallback2);
   }
   
   if (videoData.videoUrlFallback3 && videoData.videoUrlFallback3 !== videoData.videoUrl) {
@@ -844,6 +859,7 @@ async function loadVideoFromData(videoData) {
       src: videoData.videoUrlFallback3,
       type: 'application/x-mpegURL'
     });
+    console.log('[3Speak Player] Fallback3 video URL:', videoData.videoUrlFallback3);
   }
 
   player.src(sources);
