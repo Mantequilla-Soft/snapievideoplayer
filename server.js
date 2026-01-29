@@ -101,8 +101,8 @@ function transformIPFSUrl(ipfsUrl, useFallback = false) {
  */
 function getVideoUrls(ipfsUrl) {
   const gateways = {
-    hotcdn: 'https://hotipfs-3speak.b-cdn.net/ipfs',   // BunnyCDN Hotnode (primary)
-    cdn: 'https://ipfs-3speak.b-cdn.net/ipfs',         // BunnyCDN IPFS (fallback)
+    cdn: 'https://ipfs-3speak.b-cdn.net/ipfs',         // BunnyCDN IPFS (primary - legacy pullzone)
+    hotcdn: 'https://hotipfs-3speak-1.b-cdn.net/hls',   // BunnyCDN Hotnode (fallback)
     supernode: 'https://ipfs.3speak.tv/ipfs',          // Supernode (direct IPFS)
     audionode: 'https://ipfs-audio.3speak.tv/ipfs'     // Audionode (backup)
   };
@@ -110,8 +110,8 @@ function getVideoUrls(ipfsUrl) {
   if (ipfsUrl.startsWith('ipfs://')) {
     const cidPath = ipfsUrl.replace('ipfs://', '');
     return {
-      primary: `${gateways.hotcdn}/${cidPath}`,
-      fallback1: `${gateways.cdn}/${cidPath}`,
+      primary: `${gateways.cdn}/${cidPath}`,
+      fallback1: `${gateways.hotcdn}/${cidPath}`,
       fallback2: `${gateways.supernode}/${cidPath}`,
       fallback3: `${gateways.audionode}/${cidPath}`
     };
