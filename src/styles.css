@@ -580,3 +580,41 @@ body.layout-desktop .vjs-control-bar {
     font-size: 12px;
   }
 }
+
+/* TV Fullscreen Mode - Fill entire screen */
+body.tv-fullscreen-mode {
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+}
+
+body.tv-fullscreen-mode .container {
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+}
+
+body.tv-fullscreen-mode .player-wrapper {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-height: none !important;
+  padding-bottom: 0 !important;
+  margin: 0 !important;
+}
+
+body.tv-fullscreen-mode .video-js {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+}
+
+body.tv-fullscreen-mode .vjs-tech {
+  width: 100vw !important;
+  height: 100vh !important;
+  object-fit: contain !important;
+}

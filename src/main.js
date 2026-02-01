@@ -19,6 +19,7 @@ let isDebugMode = false;
 let shouldAutoplay = false;
 let shouldShowControls = true; // Controls visible by default
 let isChrome = false; // Detected once at startup for performance
+let isTVMode = false; // TV mode disables video.js hotkeys, Enter toggles fullscreen
 
 function debugLog(...args) {
   if (isDebugMode) {
@@ -66,7 +67,7 @@ function initializePlayer() {
     responsive: !isFixedLayout,   // DISABLE responsive too
     playbackRates: [0.5, 1, 1.5, 2],
     userActions: {
-      hotkeys: true,
+      hotkeys: !isTVMode,  // Disable hotkeys in TV mode (we handle Enter for fullscreen)
       click: true  // Enable tap/click on video to play/pause
     },
     controlBar: {
@@ -694,6 +695,74 @@ function initializePlayer() {
           player.exitFullscreen();
         }
         break;
+      case 'fullscreen-entered':
+        // Parent entered CSS fullscreen, make player fill the container
+        debugLog('Parent CSS fullscreen entered, enabling fill mode');
+        player.fill(true);
+        player.fluid(false);
+        // Force dimensions
+        player.width('100%');
+        player.height('100%');
+        // Add class for CSS override
+        document.body.classList.add('tv-fullscreen-mode');
+        break;
+      case 'fullscreen-exited':
+        // Parent exited CSS fullscreen, restore normal mode
+        debugLog('Parent CSS fullscreen exited, restoring layout');
+        // Remove class first
+        document.body.classList.remove('tv-fullscreen-mode');
+        // Reset inline styles on player-wrapper
+        var playerWrapper = document.querySelector('.player-wrapper');
+        if (playerWrapper) {
+          playerWrapper.style.width = '';
+          playerWrapper.style.height = '';
+          playerWrapper.style.paddingBottom = '';
+          playerWrapper.style.maxHeight = '';
+        }
+        // Reset inline styles on player element
+        var playerEl = player.el();
+        if (playerEl) {
+          playerEl.style.position = '';
+          playerEl.style.top = '';
+          playerEl.style.left = '';
+          playerEl.style.width = '';
+          playerEl.style.height = '';
+        }
+        // Reset inline styles on video tech element
+        var techEl = player.tech({ IWillNotUseThisInPlugins: true });
+        if (techEl && techEl.el()) {
+          techEl.el().style.width = '';
+          techEl.el().style.height = '';
+          techEl.el().style.position = '';
+          techEl.el().style.top = '';
+          techEl.el().style.left = '';
+          techEl.el().style.transform = '';
+        }
+        // Check if we're in a fixed layout mode
+        var isFixedLayoutOnExit = document.body.classList.contains('layout-mobile') ||
+                                   document.body.classList.contains('layout-square') ||
+                                   document.body.classList.contains('layout-desktop');
+        // Restore player modes
+        player.fill(false);
+        // Only enable fluid mode if NOT in a fixed layout
+        // Fixed layouts use CSS padding-bottom for aspect ratio - fluid mode calculates wrong dimensions
+        if (!isFixedLayoutOnExit) {
+          player.fluid(true);
+          debugLog('Fluid mode restored (no fixed layout)');
+        } else {
+          debugLog('Skipping fluid mode (fixed layout handles aspect ratio via CSS)');
+        }
+        // Force player to recalculate dimensions
+        player.width('');
+        player.height('');
+        // Trigger resize to recalculate layout
+        setTimeout(function() {
+          player.trigger('resize');
+          player.trigger('playerresize');
+          window.dispatchEvent(new Event('resize'));
+          debugLog('Triggered resize events');
+        }, 100);
+        break;
       case 'setVolume':
       case 'set-volume':
         if (typeof data.volume === 'number') {
@@ -756,7 +825,8 @@ function getUrlParams() {
     debug: params.get('debug'),
     noscroll: params.get('noscroll'), // '1' or 'true' to disable scrollbars
     autoplay: params.get('autoplay'), // '1' or 'true' to autoplay (muted)
-    controls: params.get('controls') // '0' or 'false' to hide controls
+    controls: params.get('controls'), // '0' or 'false' to hide controls
+    tvmode: params.get('tvmode') // '1' or 'true' for TV mode (Enter key toggles fullscreen)
   };
 }
 
@@ -1135,10 +1205,11 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug, noscroll, autoplay, controls } = getUrlParams();
+  const { video, type, mode, layout, debug, noscroll, autoplay, controls, tvmode } = getUrlParams();
 
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
   shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
+  isTVMode = ['1', 'true', 'yes'].includes((tvmode || '').toLowerCase());
   // Controls are shown by default, hide only if explicitly set to '0' or 'false'
   shouldShowControls = !['0', 'false', 'no'].includes((controls || '').toLowerCase());
 
@@ -1167,9 +1238,28 @@ document.addEventListener('DOMContentLoaded', async function() {
   }
   
   debugLog('Body class list before init', document.body.className);
-  
+
   // 2. NOW: Initialize the player (it can now detect layout classes correctly)
   initializePlayer();
+
+  // TV Mode: Enter key toggles fullscreen (direct user gesture in iframe)
+  // Use capture phase to intercept before video.js hotkeys handle it
+  console.log('[3Speak Player] TV Mode check:', isTVMode, 'tvmode param:', tvmode);
+  if (isTVMode) {
+    console.log('[3Speak Player] TV Mode ENABLED - Enter key will toggle fullscreen');
+    document.addEventListener('keydown', function(event) {
+      if (event.keyCode === 13 || event.key === 'Enter') {
+        console.log('[3Speak Player] Enter key pressed, toggling fullscreen');
+        if (player && player.isFullscreen()) {
+          player.exitFullscreen();
+        } else if (player) {
+          player.requestFullscreen();
+        }
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true); // capture phase
+  }
   
   if (!video) {
     showError('No video specified. URL should be: /watch?v=owner/permlink or /embed?v=owner/permlink');
