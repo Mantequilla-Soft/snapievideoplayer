@@ -22,6 +22,7 @@ let isChrome = false; // Detected once at startup for performance
 let isTVMode = false; // TV mode disables video.js hotkeys, Enter toggles fullscreen
 let shouldStartMuted = false; // Start player muted (parent can unmute via postMessage)
 let shouldLoop = false; // Loop video playback (seek to start on ended)
+let videoIsVertical = false; // Tracks video orientation for screen.orientation.lock
 
 function debugLog(...args) {
   if (isDebugMode) {
@@ -716,6 +717,27 @@ function initializePlayer() {
           player.exitFullscreen();
         }
         break;
+      case 'lock-orientation':
+        // Lock screen orientation based on video dimensions
+        // Portrait videos → lock portrait, landscape videos → lock landscape
+        if (screen.orientation && screen.orientation.lock) {
+          var orientationType = videoIsVertical ? 'portrait' : 'landscape';
+          screen.orientation.lock(orientationType).then(function() {
+            debugLog('Screen orientation locked to', orientationType);
+          }).catch(function(err) {
+            debugLog('Screen orientation lock failed:', err.message);
+          });
+        } else {
+          debugLog('Screen orientation lock API not available');
+        }
+        break;
+      case 'unlock-orientation':
+        // Unlock screen orientation
+        if (screen.orientation && screen.orientation.unlock) {
+          screen.orientation.unlock();
+          debugLog('Screen orientation unlocked');
+        }
+        break;
       case 'fullscreen-entered':
         // Parent entered CSS fullscreen, make player fill the container
         debugLog('Parent CSS fullscreen entered, enabling fill mode');
@@ -1002,6 +1024,7 @@ function handleAspectRatio() {
   }
   
   const isVertical = videoHeight > videoWidth;
+  videoIsVertical = isVertical; // Store at module level for postMessage orientation commands
   const aspectRatio = `${videoWidth}:${videoHeight}`;
   
   debugLog('handleAspectRatio video dimensions', {

@@ -343,6 +343,35 @@ function embed(author, permlink) {
 }
 ```
 
+### PostMessage Commands (Parent → Player)
+
+The parent window can control the player via `postMessage`:
+
+| Command | Description |
+|---------|-------------|
+| `play` | Play the video |
+| `pause` | Pause the video |
+| `toggle-play` | Toggle play/pause |
+| `mute` | Mute the player |
+| `unmute` | Unmute the player |
+| `toggleMute` | Toggle mute state |
+| `seek` | Seek to time (send `{ type: 'seek', time: 30 }`) |
+| `seekForward` | Seek forward (default 10s, or `{ seconds: N }`) |
+| `seekBackward` | Seek backward (default 10s, or `{ seconds: N }`) |
+| `toggle-fullscreen` | Toggle fullscreen |
+| `enter-fullscreen` | Enter fullscreen |
+| `exit-fullscreen` | Exit fullscreen |
+| `lock-orientation` | Lock screen orientation based on video dimensions (portrait for vertical, landscape for horizontal) |
+| `unlock-orientation` | Unlock screen orientation |
+
+```javascript
+// Example: lock orientation when entering fullscreen on mobile
+const iframe = document.querySelector('iframe');
+iframe.contentWindow.postMessage({ type: 'lock-orientation' }, '*');
+// Later, unlock:
+iframe.contentWindow.postMessage({ type: 'unlock-orientation' }, '*');
+```
+
 ### Technical Details
 
 - **No forced aspect ratios** - The player lets Video.js calculate naturally
