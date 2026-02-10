@@ -20,6 +20,8 @@ let shouldAutoplay = false;
 let shouldShowControls = true; // Controls visible by default
 let isChrome = false; // Detected once at startup for performance
 let isTVMode = false; // TV mode disables video.js hotkeys, Enter toggles fullscreen
+let shouldStartMuted = false; // Start player muted (parent can unmute via postMessage)
+let shouldLoop = false; // Loop video playback (seek to start on ended)
 
 function debugLog(...args) {
   if (isDebugMode) {
@@ -101,6 +103,18 @@ function initializePlayer() {
     fluidOption: !isFixedLayout,
     responsiveOption: !isFixedLayout
   });
+
+  // Apply URL mute param immediately so no audio plays before postMessage arrives
+  if (shouldStartMuted) {
+    player.muted(true);
+    debugLog('Player started muted via URL parameter');
+  }
+
+  // Apply loop — video.js native loop replays seamlessly without ended event
+  if (shouldLoop) {
+    player.loop(true);
+    debugLog('Player looping enabled via URL parameter');
+  }
 
   // Initialize quality selector plugin
   player.hlsQualitySelector({
@@ -197,7 +211,14 @@ function initializePlayer() {
     // Autoplay: try with sound first, fall back to muted
     // Skip autoplay entirely on Chrome (unreliable autoplay policy)
     if (shouldAutoplay) {
-      if (isChrome) {
+      if (shouldStartMuted) {
+        // URL requested muted start — just play muted, don't try unmuted first
+        debugLog('Autoplay: mute param set, playing muted');
+        player.muted(true);
+        player.play().catch(function(err) {
+          debugLog('Muted autoplay failed:', err.message);
+        });
+      } else if (isChrome) {
         // Chrome: skip autoplay entirely (detected at startup)
         debugLog('Autoplay: Chrome detected, skipping autoplay');
       } else {
@@ -826,7 +847,9 @@ function getUrlParams() {
     noscroll: params.get('noscroll'), // '1' or 'true' to disable scrollbars
     autoplay: params.get('autoplay'), // '1' or 'true' to autoplay (muted)
     controls: params.get('controls'), // '0' or 'false' to hide controls
-    tvmode: params.get('tvmode') // '1' or 'true' for TV mode (Enter key toggles fullscreen)
+    tvmode: params.get('tvmode'), // '1' or 'true' for TV mode (Enter key toggles fullscreen)
+    mute: params.get('mute'), // '1' or 'true' to start player muted (parent can unmute via postMessage)
+    loop: params.get('loop') // '1' or 'true' to loop video playback
   };
 }
 
@@ -1205,18 +1228,20 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug, noscroll, autoplay, controls, tvmode } = getUrlParams();
+  const { video, type, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop } = getUrlParams();
 
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
   shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
   isTVMode = ['1', 'true', 'yes'].includes((tvmode || '').toLowerCase());
+  shouldStartMuted = ['1', 'true', 'yes'].includes((mute || '').toLowerCase());
+  shouldLoop = ['1', 'true', 'yes'].includes((loop || '').toLowerCase());
   // Controls are shown by default, hide only if explicitly set to '0' or 'false'
   shouldShowControls = !['0', 'false', 'no'].includes((controls || '').toLowerCase());
 
   // PERFORMANCE: Detect Chrome once at startup (avoid regex on every video load)
   isChrome = /Chrome/.test(navigator.userAgent) && !/Edg|Brave/.test(navigator.userAgent);
 
-  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, controls, shouldAutoplay, shouldShowControls, isChrome });
+  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, controls, mute, loop, shouldAutoplay, shouldShowControls, shouldStartMuted, shouldLoop, isChrome });
   
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');

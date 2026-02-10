@@ -109,6 +109,13 @@ Example: `http://localhost:3005/embed?v=testuser123/ma4k9uzo`
   - `layout=mobile` - Tall 3:4 container (recommended for mobile apps)
   - `layout=square` - Square 1:1 container (maximum compatibility)
   - `layout=desktop` - Flexible responsive (default behavior)
+- `autoplay=1` - **Optional**: Autoplay the video (muted fallback if browser blocks sound)
+- `controls=0` - **Optional**: Hide player controls
+- `mute=1` - **Optional**: Start player muted (parent can unmute via postMessage `unmute` command)
+- `loop=1` - **Optional**: Loop video playback (seamless restart on ended, no ended event fired)
+- `tvmode=1` - **Optional**: TV mode (Enter key toggles fullscreen, disables Video.js hotkeys)
+- `debug=1` - **Optional**: Enable debug logging to console
+- `noscroll=1` - **Optional**: Disable scrollbars
 
 **Mobile App Example:**
 ```
