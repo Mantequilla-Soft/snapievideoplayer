@@ -66,6 +66,7 @@ function initializePlayer() {
     controls: shouldShowControls,
     autoplay: false,
     preload: 'auto',
+    muted: shouldStartMuted,
     fluid: !isFixedLayout,        // DISABLE fluid in mobile/square layouts
     responsive: !isFixedLayout,   // DISABLE responsive too
     playbackRates: [0.5, 1, 1.5, 2],
@@ -105,11 +106,7 @@ function initializePlayer() {
     responsiveOption: !isFixedLayout
   });
 
-  // Apply URL mute param immediately so no audio plays before postMessage arrives
-  if (shouldStartMuted) {
-    player.muted(true);
-    debugLog('Player started muted via URL parameter');
-  }
+  debugLog('Player muted state from constructor:', player.muted(), '(shouldStartMuted:', shouldStartMuted, ')');
 
   // Apply loop — video.js native loop replays seamlessly without ended event
   if (shouldLoop) {
