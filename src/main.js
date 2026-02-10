@@ -636,24 +636,19 @@ function initializePlayer() {
     switch (command) {
       case 'play':
       case 'playVideo':
-        // Check if we have user activation (user gesture context)
-        var hasUserActivation = navigator.userActivation && navigator.userActivation.isActive;
-        debugLog('User activation status:', hasUserActivation);
+        // Respect the current mute state — don't override it.
+        // If the player is muted (via mute command or mute=1 param), play muted.
+        // If unmuted, try playing with sound; fall back to muted if browser blocks.
+        var currentlyMuted = player.muted();
+        debugLog('Play command, currently muted:', currentlyMuted);
 
-        if (hasUserActivation) {
-          // We have user gesture - try unmuted play
-          player.muted(false);
-          player.play().catch(function(error) {
-            debugLog('Play with sound failed despite user activation:', error.message);
-            // Fall back to muted
-            player.muted(true);
-            player.play().then(function() {
-              showMutedAutoplayInfo();
-            });
+        if (currentlyMuted) {
+          // Already muted — just play, no unmute attempt
+          player.play().catch(function(err) {
+            debugLog('Muted play failed:', err.message);
           });
         } else {
-          // No user gesture - try unmuted first, fall back to muted
-          player.muted(false);
+          // Unmuted — try with sound, fall back to muted if blocked
           player.play().catch(function(error) {
             debugLog('Play with sound blocked, trying muted:', error.message);
             player.muted(true);
