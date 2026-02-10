@@ -109,6 +109,13 @@ Example: `http://localhost:3005/embed?v=testuser123/ma4k9uzo`
   - `layout=mobile` - Tall 3:4 container (recommended for mobile apps)
   - `layout=square` - Square 1:1 container (maximum compatibility)
   - `layout=desktop` - Flexible responsive (default behavior)
+- `autoplay=1` - **Optional**: Autoplay the video (muted fallback if browser blocks sound)
+- `controls=0` - **Optional**: Hide player controls
+- `mute=1` - **Optional**: Start player muted (parent can unmute via postMessage `unmute` command)
+- `loop=1` - **Optional**: Loop video playback (seamless restart on ended, no ended event fired)
+- `tvmode=1` - **Optional**: TV mode (Enter key toggles fullscreen, disables Video.js hotkeys)
+- `debug=1` - **Optional**: Enable debug logging to console
+- `noscroll=1` - **Optional**: Disable scrollbars
 
 **Mobile App Example:**
 ```
@@ -334,6 +341,35 @@ function embed(author, permlink) {
     iframe.height = '600'; // Default, will auto-adjust
     document.body.appendChild(iframe);
 }
+```
+
+### PostMessage Commands (Parent → Player)
+
+The parent window can control the player via `postMessage`:
+
+| Command | Description |
+|---------|-------------|
+| `play` | Play the video |
+| `pause` | Pause the video |
+| `toggle-play` | Toggle play/pause |
+| `mute` | Mute the player |
+| `unmute` | Unmute the player |
+| `toggleMute` | Toggle mute state |
+| `seek` | Seek to time (send `{ type: 'seek', time: 30 }`) |
+| `seekForward` | Seek forward (default 10s, or `{ seconds: N }`) |
+| `seekBackward` | Seek backward (default 10s, or `{ seconds: N }`) |
+| `toggle-fullscreen` | Toggle fullscreen |
+| `enter-fullscreen` | Enter fullscreen |
+| `exit-fullscreen` | Exit fullscreen |
+| `lock-orientation` | Lock screen orientation based on video dimensions (portrait for vertical, landscape for horizontal) |
+| `unlock-orientation` | Unlock screen orientation |
+
+```javascript
+// Example: lock orientation when entering fullscreen on mobile
+const iframe = document.querySelector('iframe');
+iframe.contentWindow.postMessage({ type: 'lock-orientation' }, '*');
+// Later, unlock:
+iframe.contentWindow.postMessage({ type: 'unlock-orientation' }, '*');
 ```
 
 ### Technical Details
