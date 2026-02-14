@@ -21,6 +21,10 @@ let shouldShowControls = true; // Controls visible by default
 let isChrome = false; // Detected once at startup for performance
 let isTVMode = false; // TV mode disables video.js hotkeys, Enter toggles fullscreen
 let shouldStartMuted = false; // Start player muted (parent can unmute via postMessage)
+// intendedMuted tracks the mute state WE want, not what Video.js reports.
+// Video.js can silently reset player.muted() during source changes / HLS setup.
+// The play handler uses this flag to re-enforce the correct mute state before playing.
+let intendedMuted = false;
 let shouldLoop = false; // Loop video playback (seek to start on ended)
 let videoIsVertical = false; // Tracks video orientation for screen.orientation.lock
 
@@ -609,6 +613,20 @@ function initializePlayer() {
     console.log('[3Speak Player] Loaded successfully - Source:', player.currentSrc());
   });
 
+  // DEBUG: Track every muted state change to find what unmutes the player
+  player.on('volumechange', function() {
+    console.log('[3Speak Player] VOLUMECHANGE: muted=' + player.muted() + ', volume=' + player.volume());
+    if (window.parent !== window) {
+      window.parent.postMessage({
+        type: '3speak-volumechange',
+        muted: player.muted(),
+        volume: player.volume()
+      }, '*');
+    }
+    // Stack trace to find the culprit
+    console.trace('[3Speak Player] volumechange trace');
+  });
+
   // Listen for postMessage commands from parent window (for TV/iframe control)
   window.addEventListener('message', function(event) {
     // Always log ALL incoming messages for debugging
@@ -633,14 +651,16 @@ function initializePlayer() {
     switch (command) {
       case 'play':
       case 'playVideo':
-        // Respect the current mute state — don't override it.
-        // If the player is muted (via mute command or mute=1 param), play muted.
-        // If unmuted, try playing with sound; fall back to muted if browser blocks.
-        var currentlyMuted = player.muted();
-        debugLog('Play command, currently muted:', currentlyMuted);
+        // Use intendedMuted (our tracked state) instead of player.muted().
+        // Video.js can silently reset player.muted() during source/HLS setup,
+        // so player.muted() is unreliable. intendedMuted is always correct.
+        debugLog('Play command, intendedMuted:', intendedMuted, ', player.muted():', player.muted());
 
-        if (currentlyMuted) {
-          // Already muted — just play, no unmute attempt
+        // Re-enforce the intended mute state before playing
+        player.muted(intendedMuted);
+
+        if (intendedMuted) {
+          // Muted — just play, no unmute attempt
           player.play().catch(function(err) {
             debugLog('Muted play failed:', err.message);
           });
@@ -670,13 +690,16 @@ function initializePlayer() {
         }
         break;
       case 'mute':
+        intendedMuted = true;
         player.muted(true);
         break;
       case 'unmute':
+        intendedMuted = false;
         player.muted(false);
         break;
       case 'toggleMute':
-        player.muted(!player.muted());
+        intendedMuted = !intendedMuted;
+        player.muted(intendedMuted);
         break;
       case 'seek':
         if (typeof data.time === 'number') {
@@ -806,6 +829,7 @@ function initializePlayer() {
           player.volume(vol);
           // Unmute if setting volume > 0
           if (vol > 0 && player.muted()) {
+            intendedMuted = false;
             player.muted(false);
           }
         }
@@ -816,6 +840,7 @@ function initializePlayer() {
         var stepUp = data.step || 0.1;
         player.volume(Math.min(1, currentVol + stepUp));
         if (player.muted()) {
+          intendedMuted = false;
           player.muted(false);
         }
         break;
@@ -824,6 +849,19 @@ function initializePlayer() {
         var currentVolDown = player.volume();
         var stepDown = data.step || 0.1;
         player.volume(Math.max(0, currentVolDown - stepDown));
+        break;
+      case 'toggle-pip':
+      case 'togglePip':
+        var videoEl = player.tech({ IWillNotUseThisInPlugins: true }).el();
+        if (document.pictureInPictureElement) {
+          document.exitPictureInPicture().catch(function(err) {
+            debugLog('Exit PiP failed:', err.message);
+          });
+        } else if (videoEl && videoEl.requestPictureInPicture) {
+          videoEl.requestPictureInPicture().catch(function(err) {
+            debugLog('Enter PiP failed:', err.message);
+          });
+        }
         break;
       case 'getState':
       case 'get-state':
@@ -835,6 +873,7 @@ function initializePlayer() {
             duration: player.duration(),
             paused: player.paused(),
             muted: player.muted(),
+            intendedMuted: intendedMuted,
             volume: player.volume(),
             ended: player.ended()
           }, '*');
@@ -1249,6 +1288,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
   isTVMode = ['1', 'true', 'yes'].includes((tvmode || '').toLowerCase());
   shouldStartMuted = ['1', 'true', 'yes'].includes((mute || '').toLowerCase());
+  intendedMuted = shouldStartMuted; // Sync initial intent
   shouldLoop = ['1', 'true', 'yes'].includes((loop || '').toLowerCase());
   // Controls are shown by default, hide only if explicitly set to '0' or 'false'
   shouldShowControls = !['0', 'false', 'no'].includes((controls || '').toLowerCase());
