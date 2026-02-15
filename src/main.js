@@ -853,6 +853,11 @@ function initializePlayer() {
       case 'toggle-pip':
       case 'togglePip':
         var videoEl = player.tech({ IWillNotUseThisInPlugins: true }).el();
+        // tech.el() returns the wrapper div; get the actual <video> inside it
+        if (videoEl && videoEl.tagName !== 'VIDEO') {
+          videoEl = videoEl.querySelector('video');
+        }
+        debugLog('PiP toggle — videoEl:', videoEl?.tagName, 'pipEnabled:', document.pictureInPictureEnabled, 'current:', document.pictureInPictureElement);
         if (document.pictureInPictureElement) {
           document.exitPictureInPicture().catch(function(err) {
             debugLog('Exit PiP failed:', err.message);
@@ -861,6 +866,8 @@ function initializePlayer() {
           videoEl.requestPictureInPicture().catch(function(err) {
             debugLog('Enter PiP failed:', err.message);
           });
+        } else {
+          debugLog('PiP not available — no video element or requestPictureInPicture not supported');
         }
         break;
       case 'getState':
@@ -877,6 +884,64 @@ function initializePlayer() {
             volume: player.volume(),
             ended: player.ended()
           }, '*');
+        }
+        break;
+      case 'getQualityLevels':
+      case 'get-quality-levels':
+        if (window.parent !== window) {
+          var ql = player.qualityLevels();
+          var levels = [];
+          var activeIndex = -1; // -1 = auto
+          if (ql && ql.length > 0) {
+            for (var qi = 0; qi < ql.length; qi++) {
+              levels.push({
+                index: qi,
+                height: ql[qi].height || 0,
+                width: ql[qi].width || 0,
+                bitrate: ql[qi].bitrate || 0,
+                label: ql[qi].height ? (ql[qi].height + 'p') : ('Level ' + qi),
+                enabled: ql[qi].enabled !== false
+              });
+              // If only one level is enabled, that's the active one
+            }
+            // Detect active: if exactly one level is enabled, that's the selected one
+            var enabledCount = levels.filter(function(l) { return l.enabled; }).length;
+            if (enabledCount === 1) {
+              activeIndex = levels.findIndex(function(l) { return l.enabled; });
+            }
+          }
+          window.parent.postMessage({
+            type: '3speak-quality-levels',
+            levels: levels,
+            currentIndex: activeIndex
+          }, '*');
+        }
+        break;
+      case 'setQualityLevel':
+      case 'set-quality-level':
+        var qlSet = player.qualityLevels();
+        if (qlSet && qlSet.length > 0) {
+          var targetLevel = data.level;
+          if (targetLevel === -1 || targetLevel === 'auto') {
+            // Auto: enable all levels
+            for (var ai = 0; ai < qlSet.length; ai++) {
+              qlSet[ai].enabled = true;
+            }
+            debugLog('Quality set to auto (all levels enabled)');
+          } else if (typeof targetLevel === 'number' && targetLevel >= 0 && targetLevel < qlSet.length) {
+            // Specific level: enable only that one
+            for (var si = 0; si < qlSet.length; si++) {
+              qlSet[si].enabled = (si === targetLevel);
+            }
+            debugLog('Quality set to level', targetLevel, '(' + (qlSet[targetLevel].height || '?') + 'p)');
+          }
+          // Notify parent of the change
+          if (window.parent !== window) {
+            window.parent.postMessage({
+              type: '3speak-quality-changed',
+              level: targetLevel
+            }, '*');
+          }
         }
         break;
       default:
