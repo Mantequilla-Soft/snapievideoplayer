@@ -853,6 +853,11 @@ function initializePlayer() {
       case 'toggle-pip':
       case 'togglePip':
         var videoEl = player.tech({ IWillNotUseThisInPlugins: true }).el();
+        // tech.el() returns the wrapper div; get the actual <video> inside it
+        if (videoEl && videoEl.tagName !== 'VIDEO') {
+          videoEl = videoEl.querySelector('video');
+        }
+        debugLog('PiP toggle — videoEl:', videoEl?.tagName, 'pipEnabled:', document.pictureInPictureEnabled, 'current:', document.pictureInPictureElement);
         if (document.pictureInPictureElement) {
           document.exitPictureInPicture().catch(function(err) {
             debugLog('Exit PiP failed:', err.message);
@@ -861,6 +866,8 @@ function initializePlayer() {
           videoEl.requestPictureInPicture().catch(function(err) {
             debugLog('Enter PiP failed:', err.message);
           });
+        } else {
+          debugLog('PiP not available — no video element or requestPictureInPicture not supported');
         }
         break;
       case 'getState':
