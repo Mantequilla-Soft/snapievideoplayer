@@ -126,6 +126,53 @@ function getVideoUrls(ipfsUrl) {
 }
 
 /**
+ * Convert thumbnail reference to CDN or HTTPS URL
+ * Handles: HTTPS URLs (pass-through), IPFS CIDs (conversion), and missing values (fallback)
+ */
+function convertThumbnailToCdn(thumbnail) {
+  // If already a full HTTPS URL, return as-is
+  if (thumbnail && thumbnail.startsWith('https://')) {
+    return thumbnail;
+  }
+  
+  // If IPFS reference, convert to CDN
+  if (thumbnail) {
+    const cidPath = thumbnail.startsWith('ipfs://') 
+      ? thumbnail.replace('ipfs://', '') 
+      : thumbnail;
+    return `https://hotipfs-3speak-1.b-cdn.net/ipfs/${cidPath}`;
+  }
+  
+  // Fallback to default thumbnail
+  return `https://hotipfs-3speak-1.b-cdn.net/ipfs/${process.env.DEFAULT_THUMBNAIL_CID}`;
+}
+
+/**
+ * Convert video CID/URL to full CDN manifest URL (for mobile API)
+ * Returns ready-to-play HTTPS URL with manifest.m3u8
+ */
+function convertToCdnUrl(ipfsUrl) {
+  const cdnGateway = 'https://hotipfs-3speak-1.b-cdn.net/ipfs';
+  
+  if (ipfsUrl.startsWith('ipfs://')) {
+    const cidPath = ipfsUrl.replace('ipfs://', '');
+    // Ensure manifest.m3u8 is included for HLS
+    if (!cidPath.includes('manifest.m3u8')) {
+      return `${cdnGateway}/${cidPath}/manifest.m3u8`;
+    }
+    return `${cdnGateway}/${cidPath}`;
+  }
+  
+  // If already a full URL, return as-is
+  if (ipfsUrl.startsWith('https://')) {
+    return ipfsUrl;
+  }
+  
+  // Plain CID
+  return `${cdnGateway}/${ipfsUrl}/manifest.m3u8`;
+}
+
+/**
  * Get placeholder video URL based on status
  */
 function getPlaceholderVideo(placeholderType) {
@@ -249,8 +296,11 @@ function getVideoUrlsForEmbedStatus(video) {
 // ============================================================================
 
 /**
- * GET /api/watch?v=owner/permlink
+ * GET /api/watch?v=owner/permlink&info=true
+ * or GET /api/watch?v=owner/permlink
  * Returns legacy video metadata from videos collection
+ * When info=true: minimal JSON for mobile app (cid, thumbnail, views)
+ * Without info: full response with fallback URLs for web player
  */
 app.get('/api/watch', async (req, res) => {
   try {
@@ -261,6 +311,7 @@ app.get('/api/watch', async (req, res) => {
     }
     
     const { owner, permlink } = params;
+    const isInfoRequest = req.query.info === 'true';
     
     // Find video in legacy collection
     const video = await db.findLegacyVideo(owner, permlink);
@@ -279,7 +330,19 @@ app.get('/api/watch', async (req, res) => {
       });
     }
     
-    // Return video data with CDN-first fallback chain
+    // ===== MOBILE API RESPONSE (info=true) =====
+    if (isInfoRequest) {
+      const videoCdn = convertToCdnUrl(result.urls.primary);
+      const thumbnailCdn = convertThumbnailToCdn(video.thumbnail);
+      
+      return res.json({
+        cid: videoCdn,
+        thumbnail: thumbnailCdn,
+        views: video.views || 0
+      });
+    }
+    
+    // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
     res.json({
       success: true,
       type: 'legacy',
@@ -308,8 +371,11 @@ app.get('/api/watch', async (req, res) => {
 });
 
 /**
- * GET /api/embed?v=owner/permlink
+ * GET /api/embed?v=owner/permlink&info=true
+ * or GET /api/embed?v=owner/permlink
  * Returns embed video metadata from embed-video collection
+ * When info=true: minimal JSON for mobile app (cid, thumbnail, short, views)
+ * Without info: full response with fallback URLs for web player
  */
 app.get('/api/embed', async (req, res) => {
   try {
@@ -320,6 +386,7 @@ app.get('/api/embed', async (req, res) => {
     }
     
     const { owner, permlink } = params;
+    const isInfoRequest = req.query.info === 'true';
     
     // Find video in embed collection
     const video = await db.findEmbedVideo(owner, permlink);
@@ -338,11 +405,23 @@ app.get('/api/embed', async (req, res) => {
       });
     }
     
-    // Determine thumbnail
+    // ===== MOBILE API RESPONSE (info=true) =====
+    if (isInfoRequest) {
+      const videoCdn = convertToCdnUrl(result.urls.primary);
+      const thumbnailCdn = convertThumbnailToCdn(video.thumbnail_url);
+      
+      return res.json({
+        cid: videoCdn,
+        thumbnail: thumbnailCdn,
+        short: video.short || false,
+        views: video.views || 0
+      });
+    }
+    
+    // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
     const thumbnail = video.thumbnail_url 
       || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`;
     
-    // Return video data with CDN-first fallback chain
     res.json({
       success: true,
       type: 'embed',
