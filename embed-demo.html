@@ -137,6 +137,35 @@
         <h1>🎥 3speak Player Embedding Demo</h1>
         <p class="subtitle">Examples of how to embed videos from play.3speak.tv</p>
 
+        <!-- Captions Demo -->
+        <div class="demo-section">
+            <h2>0. Captions</h2>
+            <p>Videos with available translations show a <strong>CC</strong> button in the control bar. Click it to select a language. The last selected language is remembered across sessions.</p>
+
+            <div class="responsive-embed">
+                <iframe
+                    src="https://player.okinoko.io/watch?v=eddiespino/b48852e3&mode=iframe&layout=desktop"
+                    frameborder="0"
+                    allow="autoplay; fullscreen"
+                    allowfullscreen>
+                </iframe>
+            </div>
+
+            <div class="code-block">
+                <code>// URL Parameters for Captions:
+&captions=0   // Disable captions entirely (no CC button)
+// Default: captions enabled, CC button shown if subtitles available
+
+// postMessage API:
+send('setCaptions', { lang: 'en' });       // Enable English captions
+send('setCaptions', { lang: null });        // Disable captions
+send('getCaptionLanguages');                // Get available languages
+
+// localStorage persistence:
+// 3speak-subtitle-lang  → last selected language (auto-selects next video)</code>
+            </div>
+        </div>
+
         <!-- Standard Embed -->
         <div class="demo-section">
             <h2>1. Standard Embed (iframe mode)</h2>
