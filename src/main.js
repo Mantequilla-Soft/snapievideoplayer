@@ -3,6 +3,8 @@ import 'video.js/dist/video-js.css';
 import qualityLevels from 'videojs-contrib-quality-levels';
 import qualitySelector from 'videojs-hls-quality-selector';
 import './styles.css';
+import subtitleManager from './subtitleManager';
+import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {
@@ -27,6 +29,7 @@ let shouldStartMuted = false; // Start player muted (parent can unmute via postM
 let intendedMuted = false;
 let shouldLoop = false; // Loop video playback (seek to start on ended)
 let videoIsVertical = false; // Tracks video orientation for screen.orientation.lock
+let shouldShowCaptions = true; // Show captions by default (captions=0 disables)
 
 function debugLog(...args) {
   if (isDebugMode) {
@@ -944,6 +947,23 @@ function initializePlayer() {
           }
         }
         break;
+      case 'setCaptions':
+      case 'set-captions':
+        if (shouldShowCaptions) {
+          var captionLang = data.lang || null;
+          subtitleManager.selectLanguage(captionLang);
+        }
+        break;
+      case 'getCaptionLanguages':
+      case 'get-caption-languages':
+        if (window.parent !== window) {
+          window.parent.postMessage({
+            type: '3speak-caption-languages',
+            languages: subtitleManager.availableLanguages,
+            selectedLang: subtitleManager.selectedLang
+          }, '*');
+        }
+        break;
       default:
         // Unknown command, ignore
         break;
@@ -967,7 +987,8 @@ function getUrlParams() {
     controls: params.get('controls'), // '0' or 'false' to hide controls
     tvmode: params.get('tvmode'), // '1' or 'true' for TV mode (Enter key toggles fullscreen)
     mute: params.get('mute'), // '1' or 'true' to start player muted (parent can unmute via postMessage)
-    loop: params.get('loop') // '1' or 'true' to loop video playback
+    loop: params.get('loop'), // '1' or 'true' to loop video playback
+    captions: params.get('captions') // '0' or 'false' to disable captions
   };
 }
 
@@ -1347,7 +1368,7 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop } = getUrlParams();
+  const { video, type, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions } = getUrlParams();
 
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
   shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
@@ -1357,14 +1378,17 @@ document.addEventListener('DOMContentLoaded', async function() {
   shouldLoop = ['1', 'true', 'yes'].includes((loop || '').toLowerCase());
   // Controls are shown by default, hide only if explicitly set to '0' or 'false'
   shouldShowControls = !['0', 'false', 'no'].includes((controls || '').toLowerCase());
+  // Captions are shown by default, disable only if explicitly set to '0' or 'false'
+  shouldShowCaptions = !['0', 'false', 'no'].includes((captions || '').toLowerCase());
 
   // PERFORMANCE: Detect Chrome once at startup (avoid regex on every video load)
   isChrome = /Chrome/.test(navigator.userAgent) && !/Edg|Brave/.test(navigator.userAgent);
 
-  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, controls, mute, loop, shouldAutoplay, shouldShowControls, shouldStartMuted, shouldLoop, isChrome });
+  debugLog('DOMContentLoaded params', { video, type, mode, layout, debug, noscroll, autoplay, controls, mute, loop, captions, shouldAutoplay, shouldShowControls, shouldStartMuted, shouldLoop, shouldShowCaptions, isChrome });
   
   if (mode === 'iframe') {
     document.body.classList.add('iframe-mode');
+    document.documentElement.classList.add('iframe-mode');
     debugLog('Iframe mode enabled - minimal UI');
   }
   
@@ -1386,6 +1410,19 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // 2. NOW: Initialize the player (it can now detect layout classes correctly)
   initializePlayer();
+
+  // 3. Initialize captions if enabled
+  if (shouldShowCaptions) {
+    subtitleManager.init(onSubtitleUpdate);
+    initCaptionUI(player);
+
+    // Update subtitle overlay on timeupdate
+    player.on('timeupdate', function() {
+      if (subtitleManager.cues.length > 0) {
+        updateOverlay(player.currentTime());
+      }
+    });
+  }
 
   // TV Mode: Enter key toggles fullscreen (direct user gesture in iframe)
   // Use capture phase to intercept before video.js hotkeys handle it
@@ -1416,10 +1453,15 @@ document.addEventListener('DOMContentLoaded', async function() {
   try {
     // Fetch video data from API
     const videoData = await fetchVideoData(video, type);
-    
+
     // Load video into player
     await loadVideoFromData(videoData);
-    
+
+    // Check for available captions
+    if (shouldShowCaptions && videoData.owner && videoData.permlink) {
+      subtitleManager.checkAvailability(videoData.owner, videoData.permlink);
+    }
+
   } catch (error) {
     showError(error.message);
   }
