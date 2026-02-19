@@ -313,56 +313,90 @@ app.get('/api/watch', async (req, res) => {
     const { owner, permlink } = params;
     const isInfoRequest = req.query.info === 'true';
     
-    // Find video in legacy collection
-    const video = await db.findLegacyVideo(owner, permlink);
-    
+    // Find video in legacy collection first, then fall back to embed collection
+    const legacyVideo = await db.findLegacyVideo(owner, permlink);
+    const embedVideo = !legacyVideo ? await db.findEmbedVideo(owner, permlink) : null;
+    const video = legacyVideo || embedVideo;
+    const isEmbed = !!embedVideo;
+
     if (!video) {
       return res.status(404).json({ error: 'Video not found' });
     }
-    
-    // Determine video URLs based on status
-    const result = getVideoUrlsForLegacyStatus(video);
-    
+
+    // Determine video URLs based on status and collection type
+    const result = isEmbed
+      ? getVideoUrlsForEmbedStatus(video)
+      : getVideoUrlsForLegacyStatus(video);
+
     if (result.error) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: result.error,
-        status: result.status 
+        status: result.status
       });
     }
-    
+
     // ===== MOBILE API RESPONSE (info=true) =====
     if (isInfoRequest) {
       const videoCdn = convertToCdnUrl(result.urls.primary);
-      const thumbnailCdn = convertThumbnailToCdn(video.thumbnail);
-      
-      return res.json({
+      const thumbnailCdn = convertThumbnailToCdn(isEmbed ? video.thumbnail_url : video.thumbnail);
+
+      const response = {
         cid: videoCdn,
         thumbnail: thumbnailCdn,
         views: video.views || 0
+      };
+      if (isEmbed) response.short = video.short || false;
+
+      return res.json(response);
+    }
+
+    // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
+    if (isEmbed) {
+      const thumbnail = video.thumbnail_url
+        || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`;
+
+      res.json({
+        success: true,
+        type: 'embed',
+        owner: video.owner,
+        permlink: video.permlink,
+        title: video.originalFilename || `${video.owner}/${video.permlink}`,
+        status: video.status,
+        isPlaceholder: result.isPlaceholder,
+        videoUrl: result.urls.primary,
+        videoUrlFallback1: result.urls.fallback1,
+        videoUrlFallback2: result.urls.fallback2,
+        videoUrlFallback3: result.urls.fallback3,
+        thumbnail: thumbnail,
+        duration: video.duration || 0,
+        views: video.views || 0,
+        short: video.short || false,
+        createdAt: video.createdAt,
+        updatedAt: video.updatedAt,
+        encodingProgress: video.encodingProgress || 0
+      });
+    } else {
+      res.json({
+        success: true,
+        type: 'legacy',
+        owner: video.owner,
+        permlink: video.permlink,
+        title: video.title || 'Untitled Video',
+        description: video.description || '',
+        status: video.status,
+        isPlaceholder: result.isPlaceholder,
+        thumbnail: video.thumbnail
+          ? transformIPFSUrl(video.thumbnail)
+          : `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`,
+        videoUrl: result.urls.primary,
+        videoUrlFallback1: result.urls.fallback1,
+        videoUrlFallback2: result.urls.fallback2,
+        videoUrlFallback3: result.urls.fallback3,
+        duration: video.duration || 0,
+        views: video.views || 0,
+        tags: video.tags_v2 || video.tags || []
       });
     }
-    
-    // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
-    res.json({
-      success: true,
-      type: 'legacy',
-      owner: video.owner,
-      permlink: video.permlink,
-      title: video.title || 'Untitled Video',
-      description: video.description || '',
-      status: video.status,
-      isPlaceholder: result.isPlaceholder,
-      thumbnail: video.thumbnail 
-        ? transformIPFSUrl(video.thumbnail) 
-        : `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`,
-      videoUrl: result.urls.primary,
-      videoUrlFallback1: result.urls.fallback1,
-      videoUrlFallback2: result.urls.fallback2,
-      videoUrlFallback3: result.urls.fallback3,
-      duration: video.duration || 0,
-      views: video.views || 0,
-      tags: video.tags_v2 || video.tags || []
-    });
     
   } catch (error) {
     console.error('Error fetching legacy video:', error);
