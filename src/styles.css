@@ -637,7 +637,7 @@ body.tv-fullscreen-mode .vjs-tech {
 .video-js .vjs-control-bar {
   font-size: 12px;
   flex-wrap: nowrap;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .video-js .vjs-control-bar .vjs-control {

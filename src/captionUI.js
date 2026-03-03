@@ -48,6 +48,7 @@ function createOverlay(player) {
   overlayTextEl.className = 'subtitle-overlay-text';
 
   overlayEl.appendChild(overlayTextEl);
+  overlayEl.style.display = 'none';
   player.el().appendChild(overlayEl);
 }
 
