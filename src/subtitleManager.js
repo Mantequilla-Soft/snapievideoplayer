@@ -132,7 +132,7 @@ const subtitleManager = {
     }
   },
 
-  /** Get the active cue text for a given playback time (binary search) */
+  /** Get the active cue text for a given playback time (binary search with overlap scan) */
   getActiveCue(currentTime) {
     if (!this.cues || this.cues.length === 0) return null;
     var cues = this.cues;
@@ -147,9 +147,13 @@ const subtitleManager = {
         hi = mid - 1;
       }
     }
-    // hi is now the index of the last cue with start <= currentTime
-    if (hi >= 0 && currentTime < cues[hi].end) {
-      return cues[hi].text;
+    // hi is now the index of the last cue with start <= currentTime.
+    // Scan backwards to handle overlapping cues — a later cue may have ended
+    // while an earlier, longer cue is still active.
+    for (var i = hi; i >= 0; i--) {
+      if (currentTime >= cues[i].start && currentTime < cues[i].end) {
+        return cues[i].text;
+      }
     }
     return null;
   },
