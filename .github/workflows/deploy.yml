@@ -6,6 +6,9 @@ on:
 
 jobs:
   deploy:
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
@@ -15,8 +18,12 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            set -e
             cd /var/www/snapie-player
-            git pull origin master
-            npm install --production
+            git fetch origin --prune
+            git checkout --force ${{ github.sha }}
+            npm ci
             npm run build
+            npm prune --omit=dev
             sudo systemctl restart snapie-player
+            sudo systemctl is-active --quiet snapie-player
