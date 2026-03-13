@@ -120,7 +120,7 @@ const subtitleManager = {
       var res = await fetch(IPFS_CDN_URL + '/' + langEntry.cid);
       var srtText = await res.text();
       var parsed = parseSrt(srtText);
-      console.log('[subtitleManager] Parsed', parsed.length, 'cues from', langEntry.cid);
+      // Cues are assumed sorted by start time (SRT spec); binary search depends on this
       subtitleCache[cacheKey] = parsed;
       this.cues = parsed;
     } catch (err) {
@@ -132,13 +132,24 @@ const subtitleManager = {
     }
   },
 
-  /** Get the active cue text for a given playback time */
+  /** Get the active cue text for a given playback time (binary search) */
   getActiveCue(currentTime) {
     if (!this.cues || this.cues.length === 0) return null;
-    for (var i = 0; i < this.cues.length; i++) {
-      if (currentTime >= this.cues[i].start && currentTime < this.cues[i].end) {
-        return this.cues[i].text;
+    var cues = this.cues;
+    var lo = 0;
+    var hi = cues.length - 1;
+    // Binary search for the last cue whose start <= currentTime
+    while (lo <= hi) {
+      var mid = (lo + hi) >>> 1;
+      if (cues[mid].start <= currentTime) {
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
       }
+    }
+    // hi is now the index of the last cue with start <= currentTime
+    if (hi >= 0 && currentTime < cues[hi].end) {
+      return cues[hi].text;
     }
     return null;
   },

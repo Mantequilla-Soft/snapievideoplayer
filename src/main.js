@@ -83,7 +83,7 @@ function initializePlayer() {
     },
     controlBar: {
       volumePanel: {
-        inline: false
+        inline: true
       }
     },
     html5: {
@@ -448,52 +448,50 @@ function initializePlayer() {
     }
   });
 
-  // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
-  // This applies to ALL browsers on Mac (Safari, Chrome, Firefox, etc.)
+  // Consolidated timeupdate handler — single listener for buffer cleanup + postMessage
+  let lastTimeUpdate = 0;
+  const isInIframe = window.parent !== window;
   player.on('timeupdate', function() {
-    const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) ||
-                  /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
-    if (!isMac) return;
-
-    // Only clean every 5 seconds
     const currentTime = player.currentTime();
-    if (!player.lastBufferCleanTime || currentTime - player.lastBufferCleanTime > 5) {
-      player.lastBufferCleanTime = currentTime;
 
-      try {
-        const tech = player.tech({ IWillNotUseThisInPlugins: true });
-        if (tech && tech.vhs && tech.vhs.sourceUpdater_ && currentTime > 15) {
-          const sourceUpdater = tech.vhs.sourceUpdater_;
-          const cleanupPoint = currentTime - 10; // Keep 10 seconds behind
+    // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
+    if (isMac) {
+      if (!player.lastBufferCleanTime || currentTime - player.lastBufferCleanTime > 5) {
+        player.lastBufferCleanTime = currentTime;
 
-          debugLog('Mac OS: Periodic buffer cleanup', { currentTime, cleanupPoint });
-          sourceUpdater.remove('video', 0, cleanupPoint);
-          sourceUpdater.remove('audio', 0, cleanupPoint);
+        try {
+          const tech = player.tech({ IWillNotUseThisInPlugins: true });
+          if (tech && tech.vhs && tech.vhs.sourceUpdater_ && currentTime > 15) {
+            const sourceUpdater = tech.vhs.sourceUpdater_;
+            const cleanupPoint = currentTime - 10; // Keep 10 seconds behind
+
+            debugLog('Mac OS: Periodic buffer cleanup', { currentTime, cleanupPoint });
+            sourceUpdater.remove('video', 0, cleanupPoint);
+            sourceUpdater.remove('audio', 0, cleanupPoint);
+          }
+        } catch (e) {
+          // Silently fail buffer cleanup
         }
-      } catch (e) {
-        // Silently fail buffer cleanup
       }
     }
-  });
 
-  // Send time updates to parent window for external timeline control
-  // Throttle to ~4 updates per second to avoid flooding
-  let lastTimeUpdate = 0;
-  player.on('timeupdate', function() {
-    if (window.parent === window) return; // Not in iframe
+    // Send time updates to parent window for external timeline control
+    // Throttle to ~4 updates per second to avoid flooding
+    if (isInIframe) {
+      const now = Date.now();
+      if (now - lastTimeUpdate >= 250) {
+        lastTimeUpdate = now;
 
-    const now = Date.now();
-    if (now - lastTimeUpdate < 250) return; // Throttle
-    lastTimeUpdate = now;
-
-    window.parent.postMessage({
-      type: '3speak-timeupdate',
-      currentTime: player.currentTime(),
-      duration: player.duration(),
-      paused: player.paused(),
-      muted: player.muted(),
-      volume: player.volume()
-    }, '*');
+        window.parent.postMessage({
+          type: '3speak-timeupdate',
+          currentTime: currentTime,
+          duration: player.duration(),
+          paused: player.paused(),
+          muted: player.muted(),
+          volume: player.volume()
+        }, '*');
+      }
+    }
   });
 
   // Send duration when it becomes available
@@ -608,17 +606,17 @@ function initializePlayer() {
 
   // Log when player starts loading a source
   player.on('loadstart', function() {
-    console.log('[3Speak Player] Loadstart - Current source:', player.currentSrc());
+    debugLog('Loadstart - Current source:', player.currentSrc());
   });
 
   // Log when data is loaded
   player.on('loadeddata', function() {
-    console.log('[3Speak Player] Loaded successfully - Source:', player.currentSrc());
+    debugLog('Loaded successfully - Source:', player.currentSrc());
   });
 
-  // DEBUG: Track every muted state change to find what unmutes the player
+  // Track muted state changes
   player.on('volumechange', function() {
-    console.log('[3Speak Player] VOLUMECHANGE: muted=' + player.muted() + ', volume=' + player.volume());
+    debugLog('VOLUMECHANGE: muted=' + player.muted() + ', volume=' + player.volume());
     if (window.parent !== window) {
       window.parent.postMessage({
         type: '3speak-volumechange',
@@ -626,23 +624,19 @@ function initializePlayer() {
         volume: player.volume()
       }, '*');
     }
-    // Stack trace to find the culprit
-    console.trace('[3Speak Player] volumechange trace');
   });
 
   // Listen for postMessage commands from parent window (for TV/iframe control)
   window.addEventListener('message', function(event) {
-    // Always log ALL incoming messages for debugging
-    console.log('[3Speak Player] Received postMessage from:', event.origin, 'data:', event.data);
+    debugLog('Received postMessage from:', event.origin, 'data:', event.data);
 
     if (!player) {
-      console.log('[3Speak Player] Player not ready, ignoring message');
+      debugLog('Player not ready, ignoring message');
       return;
     }
 
     const data = event.data;
     if (!data) {
-      console.log('[3Speak Player] No data in message, ignoring');
       return;
     }
 
@@ -1067,7 +1061,7 @@ async function loadVideoFromData(videoData) {
     }
   ];
   
-  console.log('[3Speak Player] Primary video URL:', videoData.videoUrl);
+  debugLog('Primary video URL:', videoData.videoUrl);
   
   // Add fallback chain: CDN -> Supernode -> Hotnode -> Audionode
   if (videoData.videoUrlFallback1 && videoData.videoUrlFallback1 !== videoData.videoUrl) {
@@ -1075,7 +1069,7 @@ async function loadVideoFromData(videoData) {
       src: videoData.videoUrlFallback1,
       type: 'application/x-mpegURL'
     });
-    console.log('[3Speak Player] Fallback1 video URL:', videoData.videoUrlFallback1);
+    debugLog('Fallback1 video URL:', videoData.videoUrlFallback1);
   }
   
   if (videoData.videoUrlFallback2 && videoData.videoUrlFallback2 !== videoData.videoUrl) {
@@ -1083,7 +1077,7 @@ async function loadVideoFromData(videoData) {
       src: videoData.videoUrlFallback2,
       type: 'application/x-mpegURL'
     });
-    console.log('[3Speak Player] Fallback2 video URL:', videoData.videoUrlFallback2);
+    debugLog('Fallback2 video URL:', videoData.videoUrlFallback2);
   }
   
   if (videoData.videoUrlFallback3 && videoData.videoUrlFallback3 !== videoData.videoUrl) {
@@ -1091,7 +1085,7 @@ async function loadVideoFromData(videoData) {
       src: videoData.videoUrlFallback3,
       type: 'application/x-mpegURL'
     });
-    console.log('[3Speak Player] Fallback3 video URL:', videoData.videoUrlFallback3);
+    debugLog('Fallback3 video URL:', videoData.videoUrlFallback3);
   }
 
   player.src(sources);
@@ -1426,12 +1420,12 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // TV Mode: Enter key toggles fullscreen (direct user gesture in iframe)
   // Use capture phase to intercept before video.js hotkeys handle it
-  console.log('[3Speak Player] TV Mode check:', isTVMode, 'tvmode param:', tvmode);
+  debugLog('TV Mode check:', isTVMode, 'tvmode param:', tvmode);
   if (isTVMode) {
-    console.log('[3Speak Player] TV Mode ENABLED - Enter key will toggle fullscreen');
+    debugLog('TV Mode ENABLED - Enter key will toggle fullscreen');
     document.addEventListener('keydown', function(event) {
       if (event.keyCode === 13 || event.key === 'Enter') {
-        console.log('[3Speak Player] Enter key pressed, toggling fullscreen');
+        debugLog('Enter key pressed, toggling fullscreen');
         if (player && player.isFullscreen()) {
           player.exitFullscreen();
         } else if (player) {
