@@ -645,6 +645,15 @@ body.tv-fullscreen-mode .vjs-tech {
   flex-shrink: 1;
 }
 
+/* On mobile, collapse the volume slider — mute button stays visible */
+@media (max-width: 480px) {
+  .video-js .vjs-volume-panel:not(.vjs-hover) .vjs-volume-control {
+    width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}
+
 .video-js .vjs-control-bar .vjs-fullscreen-control {
   flex-shrink: 0;
 }
