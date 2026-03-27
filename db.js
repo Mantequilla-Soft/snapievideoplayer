@@ -50,16 +50,26 @@ async function findLegacyVideo(owner, permlink) {
 }
 
 /**
- * Find video in embed collection by owner and permlink
+ * Find video in embed collection by owner and permlink.
+ * Falls back to hive_permlink when the 3speak permlink doesn't match.
  */
 async function findEmbedVideo(owner, permlink) {
   const database = getDb();
   const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
-  
-  return await collection.findOne({
+
+  const video = await collection.findOne({
     owner: owner,
     permlink: permlink
   });
+
+  if (!video) {
+    return await collection.findOne({
+      owner: owner,
+      hive_permlink: permlink
+    });
+  }
+
+  return video;
 }
 
 /**
