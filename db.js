@@ -100,19 +100,23 @@ async function incrementLegacyViews(owner, permlink) {
 async function incrementEmbedViews(owner, permlink) {
   const database = getDb();
   const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
-  
-  // First, check if views field exists, if not set it to 0, then increment
+
+  const filter = {
+    owner: owner,
+    $or: [{ permlink: permlink }, { hive_permlink: permlink }]
+  };
+
+  // Initialize views field if it doesn't exist, then increment
   await collection.updateOne(
-    { owner: owner, permlink: permlink, views: { $exists: false } },
+    { ...filter, views: { $exists: false } },
     { $set: { views: 0 } }
   );
-  
-  // Now increment views
+
   const result = await collection.updateOne(
-    { owner: owner, permlink: permlink },
+    filter,
     { $inc: { views: 1 } }
   );
-  
+
   return result.modifiedCount > 0;
 }
 
