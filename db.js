@@ -19,6 +19,12 @@ async function connect() {
     console.log('✓ Connected to MongoDB');
 
     db = client.db(process.env.MONGODB_DATABASE);
+
+    // Ensure indexes (no-ops if they already exist)
+    await db.collection(process.env.MONGODB_COLLECTION_NEW).createIndex(
+      { owner: 1, hive_permlink: 1 }
+    );
+
     return db;
   } catch (error) {
     console.error('MongoDB connection error:', error);
