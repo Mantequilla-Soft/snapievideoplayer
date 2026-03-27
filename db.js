@@ -19,6 +19,12 @@ async function connect() {
     console.log('✓ Connected to MongoDB');
 
     db = client.db(process.env.MONGODB_DATABASE);
+
+    // Ensure indexes (no-ops if they already exist)
+    await db.collection(process.env.MONGODB_COLLECTION_NEW).createIndex(
+      { owner: 1, hive_permlink: 1 }
+    );
+
     return db;
   } catch (error) {
     console.error('MongoDB connection error:', error);
@@ -50,16 +56,26 @@ async function findLegacyVideo(owner, permlink) {
 }
 
 /**
- * Find video in embed collection by owner and permlink
+ * Find video in embed collection by owner and permlink.
+ * Falls back to hive_permlink when the 3speak permlink doesn't match.
  */
 async function findEmbedVideo(owner, permlink) {
   const database = getDb();
   const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
-  
-  return await collection.findOne({
+
+  const video = await collection.findOne({
     owner: owner,
     permlink: permlink
   });
+
+  if (!video) {
+    return await collection.findOne({
+      owner: owner,
+      hive_permlink: permlink
+    });
+  }
+
+  return video;
 }
 
 /**
@@ -84,19 +100,23 @@ async function incrementLegacyViews(owner, permlink) {
 async function incrementEmbedViews(owner, permlink) {
   const database = getDb();
   const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
-  
-  // First, check if views field exists, if not set it to 0, then increment
+
+  const filter = {
+    owner: owner,
+    $or: [{ permlink: permlink }, { hive_permlink: permlink }]
+  };
+
+  // Initialize views field if it doesn't exist, then increment
   await collection.updateOne(
-    { owner: owner, permlink: permlink, views: { $exists: false } },
+    { ...filter, views: { $exists: false } },
     { $set: { views: 0 } }
   );
-  
-  // Now increment views
+
   const result = await collection.updateOne(
-    { owner: owner, permlink: permlink },
+    filter,
     { $inc: { views: 1 } }
   );
-  
+
   return result.modifiedCount > 0;
 }
 
