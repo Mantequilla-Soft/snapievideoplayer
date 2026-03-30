@@ -1,7 +1,24 @@
 import { parseSrt } from './srtParser';
 
-const TRANSLATE_API_URL = 'https://3speak-translator.okinoko.io';
+const TRANSLATE_API_URLS = [
+  'https://translate.3speak.tv',
+  'https://3speak-translator.okinoko.io'
+];
 const IPFS_CDN_URL = 'https://hotipfs-3speak-1.b-cdn.net/ipfs';
+
+/** Fetch with fallback — tries each URL in order until one succeeds */
+async function fetchWithFallback(buildUrl) {
+  var lastErr;
+  for (var i = 0; i < TRANSLATE_API_URLS.length; i++) {
+    try {
+      var res = await fetch(buildUrl(TRANSLATE_API_URLS[i]));
+      if (res.ok) return res;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  return null;
+}
 
 const SUBTITLE_LANG_KEY = '3speak-subtitle-lang';
 
@@ -40,10 +57,10 @@ const subtitleManager = {
     }
 
     try {
-      const res = await fetch(
-        `${TRANSLATE_API_URL}/subtitles/${author}/${permlink}`
-      );
-      if (!res.ok) {
+      const res = await fetchWithFallback(function(base) {
+        return base + '/subtitles/' + author + '/' + permlink;
+      });
+      if (!res) {
         this.availableLanguages = null;
         this._notify();
         return;
