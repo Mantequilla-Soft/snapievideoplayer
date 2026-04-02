@@ -128,15 +128,18 @@ async function updateEmbedDuration(owner, permlink, duration) {
   const database = getDb();
   const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
 
-  const filter = {
-    owner: owner,
-    $or: [{ permlink: permlink }, { hive_permlink: permlink }]
-  };
-
-  const result = await collection.updateOne(
-    filter,
-    { $set: { duration: duration } }
+  const update = { $set: { duration } };
+  let result = await collection.updateOne(
+    { owner, permlink },
+    update
   );
+
+  if (result.matchedCount === 0) {
+    result = await collection.updateOne(
+      { owner, hive_permlink: permlink },
+      update
+    );
+  }
 
   return result.modifiedCount > 0;
 }

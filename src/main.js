@@ -299,7 +299,7 @@ function initializePlayer() {
     }
 
     // Self-heal duration on first play
-    if (currentVideoData && !player.hasHealedDuration) {
+    if (currentVideoData && currentVideoData.type === 'embed' && !player.hasHealedDuration) {
       const realDuration = player.duration();
       const storedDuration = currentVideoData.duration || 0;
       if (realDuration && isFinite(realDuration) && realDuration > 0) {
@@ -1037,7 +1037,12 @@ async function healDuration(videoData, realDuration) {
       })
     });
     if (response.ok) {
-      debugLog(`Duration healed: ${realDuration}s`);
+      const payload = await response.json();
+      if (payload.success) {
+        debugLog(`Duration healed: ${realDuration}s`);
+      } else {
+        debugLog('Duration heal request accepted but not applied');
+      }
     }
   } catch (error) {
     console.error('Error healing duration:', error);

@@ -548,8 +548,12 @@ app.post('/api/view', async (req, res) => {
 app.post('/api/duration', async (req, res) => {
   try {
     const { owner, permlink, duration } = req.body;
+    const isValidId = (v) =>
+      typeof v === 'string' &&
+      v.trim().length > 0 &&
+      /^[a-z0-9._-]+$/i.test(v);
 
-    if (!owner || !permlink || typeof duration !== 'number' || duration <= 0 || !isFinite(duration)) {
+    if (!isValidId(owner) || !isValidId(permlink) || !Number.isFinite(duration) || duration <= 0) {
       return res.status(400).json({ error: 'Missing or invalid fields' });
     }
 
