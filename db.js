@@ -121,6 +121,27 @@ async function incrementEmbedViews(owner, permlink) {
 }
 
 /**
+ * Update duration for an embed video (self-healing)
+ * Only updates if the current duration is null, 0, or differs from the real duration
+ */
+async function updateEmbedDuration(owner, permlink, duration) {
+  const database = getDb();
+  const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
+
+  const filter = {
+    owner: owner,
+    $or: [{ permlink: permlink }, { hive_permlink: permlink }]
+  };
+
+  const result = await collection.updateOne(
+    filter,
+    { $set: { duration: duration } }
+  );
+
+  return result.modifiedCount > 0;
+}
+
+/**
  * Close MongoDB connection
  */
 async function close() {
@@ -139,5 +160,6 @@ module.exports = {
   findEmbedVideo,
   incrementLegacyViews,
   incrementEmbedViews,
+  updateEmbedDuration,
   close
 };

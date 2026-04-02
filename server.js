@@ -540,6 +540,27 @@ app.post('/api/view', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/duration
+ * Self-healing: update video duration when the player detects it's missing or wrong
+ * Body: { owner, permlink, duration }
+ */
+app.post('/api/duration', async (req, res) => {
+  try {
+    const { owner, permlink, duration } = req.body;
+
+    if (!owner || !permlink || typeof duration !== 'number' || duration <= 0 || !isFinite(duration)) {
+      return res.status(400).json({ error: 'Missing or invalid fields' });
+    }
+
+    const success = await db.updateEmbedDuration(owner, permlink, Math.round(duration));
+    res.json({ success });
+  } catch (error) {
+    console.error('Error updating duration:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Serve landing page for root
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'landing.html'));
