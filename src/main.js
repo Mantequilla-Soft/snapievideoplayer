@@ -297,6 +297,19 @@ function initializePlayer() {
       incrementViewCount(currentVideoData);
       player.hasIncrementedView = true;
     }
+
+    // Self-heal duration on first play
+    if (currentVideoData && currentVideoData.type === 'embed' && !player.hasHealedDuration) {
+      const realDuration = player.duration();
+      const storedDuration = currentVideoData.duration || 0;
+      if (realDuration && isFinite(realDuration) && realDuration > 0) {
+        // Heal if stored duration is missing or differs by more than 1 second
+        if (!storedDuration || Math.abs(storedDuration - realDuration) > 1) {
+          healDuration(currentVideoData, realDuration);
+        }
+        player.hasHealedDuration = true;
+      }
+    }
   });
   
   // PERFORMANCE: Aggressive quality upgrades on first play (JW Player style)
@@ -1011,6 +1024,31 @@ async function fetchVideoData(videoParam, type) {
   }
 }
 
+// Self-heal duration: update DB if stored duration is null/0/wrong
+async function healDuration(videoData, realDuration) {
+  try {
+    const response = await fetch('/api/duration', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        owner: videoData.owner,
+        permlink: videoData.permlink,
+        duration: realDuration
+      })
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload.success) {
+        debugLog(`Duration healed: ${realDuration}s`);
+      } else {
+        debugLog('Duration heal request accepted but not applied');
+      }
+    }
+  } catch (error) {
+    console.error('Error healing duration:', error);
+  }
+}
+
 // Increment view count
 async function incrementViewCount(videoData) {
   try {
@@ -1043,6 +1081,7 @@ async function loadVideoFromData(videoData) {
 
   currentVideoData = videoData;
   player.hasIncrementedView = false;
+  player.hasHealedDuration = false;
   player.triedFallback = false;
 
   // Set poster/thumbnail if available
