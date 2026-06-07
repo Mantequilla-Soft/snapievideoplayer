@@ -9,6 +9,10 @@ const db = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3005;
 
+// Trust the nginx reverse proxy so req.ip reflects the real client IP
+// (from X-Forwarded-For) instead of the loopback address.
+app.set('trust proxy', true);
+
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
@@ -527,6 +531,16 @@ app.post('/api/view', async (req, res) => {
         success = await db.incrementLegacyViews(owner, permlink);
       } else {
         success = await db.incrementEmbedViews(owner, permlink);
+        // Also log a per-event row (with viewer IP) so embed views can be
+        // de-duplicated by IP later, matching the legacy `views` collection.
+        const userIP = req.ip;
+        const userAgent = req.headers['user-agent'] || '';
+        try {
+          await db.logEmbedView(owner, permlink, userIP, userAgent);
+        } catch (logErr) {
+          // Never fail the view request because the per-event log failed.
+          console.error('Error logging embed view event:', logErr);
+        }
       }
       res.json({ success: success, counted: true });
     } else {
