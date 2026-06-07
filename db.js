@@ -145,6 +145,25 @@ async function updateEmbedDuration(owner, permlink, duration) {
 }
 
 /**
+ * Log a per-event view row for an embed video.
+ * Mirrors the shape of the legacy `views` collection so both can be queried
+ * together. Note: the views collection keys on `author`, not `owner`.
+ */
+async function logEmbedView(owner, permlink, userIP, userAgent) {
+  const database = getDb();
+  const collection = database.collection(process.env.MONGODB_COLLECTION_VIEWS || 'views');
+
+  await collection.insertOne({
+    timestamp: new Date(),
+    author: owner,
+    permlink: permlink,
+    userIP: userIP,
+    userAgent: userAgent,
+    __v: 0
+  });
+}
+
+/**
  * Close MongoDB connection
  */
 async function close() {
@@ -164,5 +183,6 @@ module.exports = {
   incrementLegacyViews,
   incrementEmbedViews,
   updateEmbedDuration,
+  logEmbedView,
   close
 };
