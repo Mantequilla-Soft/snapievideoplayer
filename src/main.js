@@ -30,6 +30,7 @@ let intendedMuted = false;
 let shouldLoop = false; // Loop video playback (seek to start on ended)
 let videoIsVertical = false; // Tracks video orientation for screen.orientation.lock
 let shouldShowCaptions = true; // Show captions by default (captions=0 disables)
+let skipViewCount = false; // /play route or ?noview=1 → don't increment the view counter (watch-duration tracking still runs)
 
 function debugLog(...args) {
   if (isDebugMode) {
@@ -292,10 +293,17 @@ function initializePlayer() {
       replayBtn.style.display = 'none';
     }
     
-    // Increment view count on first play
-    if (currentVideoData && !player.hasIncrementedView) {
+    // Increment view count on first play (unless /play route or ?noview=1)
+    if (currentVideoData && !player.hasIncrementedView && !skipViewCount) {
       incrementViewCount(currentVideoData);
       player.hasIncrementedView = true;
+    }
+
+    // Open a server-measured watch-duration session on first play (always —
+    // independent of the view counter, so /play still tracks duration).
+    if (currentVideoData && !player.hasStartedWatchSession) {
+      player.hasStartedWatchSession = true;
+      startWatchSession(currentVideoData);
     }
 
     // Self-heal duration on first play
@@ -361,12 +369,18 @@ function initializePlayer() {
     debugLog('Video paused');
     updatePlayerState('Paused');
     handleLogoVisibility();
+    // Final measured beat for the sliver since the last one, so a viewer who
+    // pauses is credited up to the pause point.
+    watchBeat();
   });
 
   player.on('ended', function() {
     debugLog('Video ended');
     updatePlayerState('Ended');
     showReplayButton();
+    // Capture the tail — a short video that ends before the first interval
+    // still gets a genuine watched-duration row.
+    watchBeat();
   });
   
   // Handle user activity changes
@@ -467,6 +481,15 @@ function initializePlayer() {
   player.on('timeupdate', function() {
     const currentTime = player.currentTime();
 
+    // Watch-duration heartbeat — timeupdate only fires while the video is
+    // genuinely advancing (not when paused), so it doubles as our "still
+    // watching" signal. Beat at most once per interval; the server measures the
+    // real wall-clock gap between beats.
+    const W = player.watch;
+    if (W && W.sid && Date.now() - W.lastBeatAt >= W.beatMs) {
+      watchBeat();
+    }
+
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
       if (!player.lastBufferCleanTime || currentTime - player.lastBufferCleanTime > 5) {
@@ -506,6 +529,14 @@ function initializePlayer() {
       }
     }
   });
+
+  // Flush a final measured watch beat when the tab is hidden/closed (sendBeacon
+  // survives unload) so the last watched sliver isn't lost.
+  const flushWatchBeat = () => { if (player && player.watch && player.watch.sid) watchBeat(true); };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushWatchBeat();
+  });
+  window.addEventListener('pagehide', flushWatchBeat);
 
   // Send duration when it becomes available
   player.on('durationchange', function() {
@@ -983,9 +1014,20 @@ function initializePlayer() {
 // Parse URL parameters
 function getUrlParams() {
   const params = new URLSearchParams(window.location.search);
+  const path = window.location.pathname;
+  // Route → video type: /embed → embed, /watch → legacy, /play → embed (or
+  // ?type=legacy). The /play route (and ?noview=1) plays without counting a
+  // view — watch-duration tracking still runs.
+  let type;
+  if (path.includes('/embed')) type = 'embed';
+  else if (path.includes('/play')) type = params.get('type') === 'legacy' ? 'legacy' : 'embed';
+  else type = 'legacy';
+  const noview = path.includes('/play')
+    || ['1', 'true', 'yes'].includes((params.get('noview') || '').toLowerCase());
   return {
     video: params.get('v'),
-    type: window.location.pathname.includes('/embed') ? 'embed' : 'legacy',
+    type,
+    noview,
     mode: params.get('mode'), // 'iframe' for minimal embedding UI
     layout: params.get('layout'), // 'mobile', 'square', or 'desktop' (default)
     debug: params.get('debug'),
@@ -1072,6 +1114,75 @@ async function incrementViewCount(videoData) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Watch-duration heartbeat (server-measured, anti-forge).
+// Mirrors the snapieaudio listen tracker: /api/watch/start opens a server-side
+// session bound to (sid, owner, permlink, ip) via an HMAC token; /api/watch/beat
+// is sent (throttled) while the video is genuinely playing. The server credits
+// only the real wall-clock gap it measures between beats, so watch time can't be
+// forged with a single request. Each session upserts ONE row into `view-durations`
+// with watchedSeconds + watchedPct + ip + video. Runs regardless of the view
+// counter — /play tracks duration without counting a view.
+// ---------------------------------------------------------------------------
+async function startWatchSession(videoData) {
+  if (!videoData || !videoData.owner || !videoData.permlink) return;
+  player.watch = { sid: null, token: null, beatMs: 5000, lastBeatAt: 0, starting: true };
+  try {
+    const realDuration = (player && isFinite(player.duration())) ? player.duration() : undefined;
+    const response = await fetch('/api/watch/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        owner: videoData.owner,
+        permlink: videoData.permlink,
+        type: videoData.type,
+        duration: realDuration,
+        position: (player && isFinite(player.currentTime())) ? player.currentTime() : 0
+      })
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    // No session when the video has no measurable duration ({ tracked:false }).
+    if (!data || !data.sid || !player.watch) return;
+    player.watch.sid = data.sid;
+    player.watch.token = data.token;
+    player.watch.beatMs = (data.beatSeconds || 5) * 1000;
+    player.watch.lastBeatAt = Date.now(); // first beat one interval from now
+    debugLog('Watch session opened', data.sid);
+  } catch (error) {
+    debugLog('Could not open watch session:', error);
+  } finally {
+    if (player.watch) player.watch.starting = false;
+  }
+}
+
+/**
+ * Send one watch heartbeat. Called (throttled) from timeupdate while the video
+ * is really advancing, plus a final beat on pause/end/tab-hide. Best-effort —
+ * never disrupts playback. Uses sendBeacon on tab-hide so the tail isn't lost.
+ */
+function watchBeat(useBeacon) {
+  const W = player && player.watch;
+  if (!W || !W.sid) return;
+  W.lastBeatAt = Date.now(); // throttle before the async call so we don't double-fire
+  const position = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  const payload = JSON.stringify({ sid: W.sid, token: W.token, position });
+  try {
+    if (useBeacon && navigator.sendBeacon) {
+      navigator.sendBeacon('/api/watch/beat', new Blob([payload], { type: 'application/json' }));
+      return;
+    }
+    fetch('/api/watch/beat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true
+    }).catch(() => {});
+  } catch (error) {
+    // best-effort — never disrupt playback
+  }
+}
+
 // Load video into player
 async function loadVideoFromData(videoData) {
   if (!player) {
@@ -1082,6 +1193,8 @@ async function loadVideoFromData(videoData) {
   currentVideoData = videoData;
   player.hasIncrementedView = false;
   player.hasHealedDuration = false;
+  player.hasStartedWatchSession = false;
+  player.watch = null;
   player.triedFallback = false;
 
   // Set poster/thumbnail if available
@@ -1401,8 +1514,9 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions } = getUrlParams();
+  const { video, type, noview, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions } = getUrlParams();
 
+  skipViewCount = !!noview;
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
   shouldAutoplay = ['1', 'true', 'yes'].includes((autoplay || '').toLowerCase());
   isTVMode = ['1', 'true', 'yes'].includes((tvmode || '').toLowerCase());
