@@ -6,6 +6,7 @@ import './styles.css';
 import subtitleManager from './subtitleManager';
 import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
 import { createScrubPreview } from './scrubPreview';
+import { createHeatmap } from './heatmapBar';
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {
@@ -19,6 +20,8 @@ if (!videojs.getPlugin('hlsQualitySelector')) {
 let player;
 let scrubPreview = null; // YouTube-style low-res seek-bar preview (created with the player)
 let scrubPreviewEnabled = true; // on by default; disable with ?preview=0/false/no
+let heatmapBar = null; // "most replayed" seek-bar heatmap (created with the player)
+let heatmapEnabled = true; // on by default; disable with ?heatmap=0/false/no
 let currentVideoData = null;
 let isDebugMode = false;
 let shouldAutoplay = false;
@@ -141,6 +144,18 @@ function initializePlayer() {
       }
     } catch (e) {
       console.warn('Scrub preview init failed:', e);
+    }
+  }
+
+  // "Most replayed" heatmap above the seek bar (same gating as the scrub preview).
+  if (shouldShowControls && heatmapEnabled) {
+    try {
+      heatmapBar = createHeatmap(player);
+      if (currentVideoData && currentVideoData.owner && currentVideoData.permlink) {
+        heatmapBar.setVideo(currentVideoData.owner, currentVideoData.permlink, currentVideoData.type);
+      }
+    } catch (e) {
+      console.warn('Heatmap init failed:', e);
     }
   }
 
@@ -1055,7 +1070,8 @@ function getUrlParams() {
     mute: params.get('mute'), // '1' or 'true' to start player muted (parent can unmute via postMessage)
     loop: params.get('loop'), // '1' or 'true' to loop video playback
     captions: params.get('captions'), // '0' or 'false' to disable captions
-    preview: params.get('preview') // '0' or 'false' to disable the seek-bar scrub preview (on by default)
+    preview: params.get('preview'), // '0' or 'false' to disable the seek-bar scrub preview (on by default)
+    heatmap: params.get('heatmap') // '0' or 'false' to disable the "most replayed" heatmap (on by default)
   };
 }
 
@@ -1266,6 +1282,11 @@ async function loadVideoFromData(videoData) {
   // Point the scrub-preview at the same manifest (pinned to lowest rendition).
   if (scrubPreview && videoData.videoUrl) {
     scrubPreview.setSource(videoData.videoUrl);
+  }
+
+  // Load the "most replayed" heatmap for this video.
+  if (heatmapBar && videoData.owner && videoData.permlink) {
+    heatmapBar.setVideo(videoData.owner, videoData.permlink, videoData.type);
   }
 
   debugLog('Video sources set', sources);
@@ -1539,7 +1560,7 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, noview, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions, preview } = getUrlParams();
+  const { video, type, noview, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions, preview, heatmap } = getUrlParams();
 
   skipViewCount = !!noview;
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
@@ -1554,6 +1575,8 @@ document.addEventListener('DOMContentLoaded', async function() {
   shouldShowCaptions = !['0', 'false', 'no'].includes((captions || '').toLowerCase());
   // Scrub preview is on by default, disable only if explicitly set to '0' or 'false'
   scrubPreviewEnabled = !['0', 'false', 'no'].includes((preview || '').toLowerCase());
+  // "Most replayed" heatmap is on by default, disable only if explicitly '0'/'false'
+  heatmapEnabled = !['0', 'false', 'no'].includes((heatmap || '').toLowerCase());
 
   // PERFORMANCE: Detect Chrome once at startup (avoid regex on every video load)
   isChrome = /Chrome/.test(navigator.userAgent) && !/Edg|Brave/.test(navigator.userAgent);

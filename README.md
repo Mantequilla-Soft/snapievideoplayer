@@ -12,6 +12,7 @@ A full-stack HTML5 video player built with Video.js for the 3speak platform. Sup
 - **Dual video systems** - Supports legacy `videos` collection and new `embed-video` collection
 - **HLS streaming** - Loads videos from IPFS gateway as HLS streams
 - **Scrub preview** - YouTube-style low-res thumbnail above the seek bar on hover (desktop) / drag (mobile). A detached hls.js `<video>` pinned to the lowest rendition renders the frame, so it never disturbs playback. On by default; disable with `preview=0`
+- **"Most replayed" heatmap** - Aggregate watch/rewatch graph above the seek bar (from `/api/heatmap`), YouTube-style. Shows once a video has enough independent viewers. On by default; disable with `heatmap=0`
 - **Status-based placeholders** - Shows different videos based on encoding status (processing, finalizing, failed, deleted)
 - **View tracking** - Automatically increments view count when video plays (and a non-polluting watch-duration heartbeat that also records the view `source`)
 - **Responsive design** - Modern UI with custom 3speak styling
@@ -117,6 +118,7 @@ Example: `http://localhost:3005/embed?v=testuser123/ma4k9uzo`
 - `tvmode=1` - **Optional**: TV mode (Enter key toggles fullscreen, disables Video.js hotkeys)
 - `captions=0` - **Optional**: Disable captions (shown by default when available)
 - `preview=0` - **Optional**: Disable the YouTube-style scrub preview (a low-res thumbnail shown above the seek bar on hover/drag). **On by default.**
+- `heatmap=0` - **Optional**: Disable the "most replayed" heatmap shown above the seek bar. **On by default** (only renders once a video has enough viewers).
 - `debug=1` - **Optional**: Enable debug logging to console
 - `noscroll=1` - **Optional**: Disable scrollbars
 
