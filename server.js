@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 require('dotenv').config();
 
 const db = require('./db');
+const watchTracking = require('./watchTracking');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -579,6 +580,18 @@ app.post('/api/duration', async (req, res) => {
   }
 });
 
+/**
+ * Watch-duration heartbeat tracking (server-measured, anti-forge).
+ * POST /api/watch/start → open a measured session
+ * POST /api/watch/beat  → heartbeat; upserts one row in `view-durations`
+ * Does NOT touch the `views` counter — that's POST /api/view.
+ */
+app.post('/api/watch/start', watchTracking.watchStart);
+app.post('/api/watch/beat', watchTracking.watchBeat);
+// GET /api/heatmap?v=owner/permlink — aggregate timeline-coverage buckets for a
+// "most replayed" heatmap above the scrubber.
+app.get('/api/heatmap', watchTracking.getHeatmap);
+
 // Serve landing page for root
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'landing.html'));
@@ -589,8 +602,11 @@ app.get('/debug-mobile.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'debug-mobile.html'));
 });
 
-// Serve frontend for /watch and /embed routes
-app.get(['/watch', '/embed'], (req, res) => {
+// Serve frontend for /watch, /embed and /play routes.
+// /play is the "play without counting a view" entry point (playground): the
+// client detects the /play path and skips the view increment, but still tracks
+// watch duration. Use ?type=legacy for legacy videos (default: embed).
+app.get(['/watch', '/embed', '/play'], (req, res) => {
   const videoParam = req.query.v;
   
   // If no video parameter, redirect to landing page
