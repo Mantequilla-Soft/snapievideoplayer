@@ -112,6 +112,12 @@ function clampPos(pos, durationSec) {
   if (!Number.isFinite(p) || p < 0) return 0;
   return durationSec > 0 ? Math.min(p, durationSec) : p;
 }
+// Where the view happened. Sanitized to a short slug; defaults to 'player'
+// (the embed iframe) when unset — that's what unlabelled/older clients are.
+function normalizeSource(s) {
+  const v = String(s || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 20);
+  return v || 'player';
+}
 
 /**
  * POST /api/watch/start — open a measured watch session.
@@ -173,20 +179,28 @@ async function watchStart(req, res) {
     const sid = crypto.randomBytes(16).toString('hex');
     const durationMs = Math.round(duration * 1000);
     const startPosition = clampPos(req.body?.position, heatmapDuration);
+    // Where the view happened: 'player' (embed iframe) | '3speak' (native site).
+    const source = normalizeSource(req.body?.source);
 
     await database.collection(SESSION_COLLECTION).insertOne({
       sid,
       owner,
       permlink: keyPermlink,
       type,
+      source,
       durationMs,
       heatmapDuration,     // seconds — stable axis for bucketing
       bucketCount,
       ip,
       userAgent,
-      accumulatedMs: 0,
+      accumulatedMs: 0,    // wall-clock attention (real seconds spent)
+      contentMs: 0,        // video content consumed (playhead advance) — speed-correct
       startPosition,       // where the watch began on the timeline
       lastPosition: startPosition,
+      maxPosition: startPosition, // furthest point reached (drop-off / retention)
+      coveredBuckets: [],  // distinct timeline buckets this session actually watched
+      rateSum: 0,          // Σ playbackRate over beats → avg speed
+      rateBeats: 0,
       startedAt: now,
       lastBeatAt: now,
       // Generous TTL: a few video-lengths so a paused tab can resume.
@@ -244,15 +258,36 @@ async function watchBeat(req, res) {
     // only real playback counts toward the heatmap.
     const contiguousMax = Math.max((credit / 1000) * 2.5, 12);
     const incs = {};
+    let contentMs = s.contentMs || 0;
+    const covered = new Set(Array.isArray(s.coveredBuckets) ? s.coveredBuckets : []);
     if (durSec > 0 && curPos >= lastPos && (curPos - lastPos) <= contiguousMax) {
+      // Content consumed = playhead advance. This is SPEED-CORRECT: at 1.5x the
+      // playhead moves 1.5x faster, so more content accrues per wall-second —
+      // exactly the fix for fast playback under-counting watch progress.
+      contentMs += (curPos - lastPos) * 1000;
       const b0 = bucketIndex(lastPos, durSec, n);
       const b1 = bucketIndex(curPos, durSec, n);
-      for (let b = b0; b <= b1; b++) incs[`buckets.${b}`] = (incs[`buckets.${b}`] || 0) + 1;
+      for (let b = b0; b <= b1; b++) {
+        incs[`buckets.${b}`] = (incs[`buckets.${b}`] || 0) + 1; // aggregate replay count
+        covered.add(b);                                          // this session's unique coverage
+      }
     }
+
+    const maxPosition = Math.max(Number(s.maxPosition) || 0, curPos);
+    // Average playback speed this session (for analytics), if the client reports it.
+    const rate = Number(req.body?.rate);
+    const rateSum = (s.rateSum || 0) + (Number.isFinite(rate) && rate > 0 ? rate : 0);
+    const rateBeats = (s.rateBeats || 0) + (Number.isFinite(rate) && rate > 0 ? 1 : 0);
 
     await sessions.updateOne(
       { sid },
-      { $set: { accumulatedMs, lastBeatAt: new Date(now), lastPosition: curPos } },
+      {
+        $set: {
+          accumulatedMs, contentMs, lastBeatAt: new Date(now),
+          lastPosition: curPos, maxPosition,
+          coveredBuckets: Array.from(covered), rateSum, rateBeats,
+        },
+      },
     );
 
     if (Object.keys(incs).length) {
@@ -262,9 +297,13 @@ async function watchBeat(req, res) {
       );
     }
 
-    const watchedSeconds = Math.round(accumulatedMs / 1000);
+    const watchedSeconds = Math.round(accumulatedMs / 1000);       // wall-clock attention
+    const contentSeconds = Math.round(contentMs / 1000);           // content consumed (speed-correct)
     const videoDuration = durSec;
-    const watchedPct = Math.min(100, Math.round((accumulatedMs / (durSec * 1000)) * 1000) / 10);
+    // % of the video actually SEEN = distinct buckets covered (speed- AND
+    // replay-correct; replays don't push it past 100, a skipped middle isn't counted).
+    const watchedPct = Math.min(100, Math.round((covered.size / n) * 1000) / 10);
+    const avgRate = rateBeats > 0 ? Math.round((rateSum / rateBeats) * 100) / 100 : null;
 
     await database.collection(LOG_COLLECTION).updateOne(
       { sid },
@@ -273,12 +312,16 @@ async function watchBeat(req, res) {
           owner: s.owner,
           permlink: s.permlink,
           type: s.type,
+          source: s.source || 'player',
           ip: s.ip,
           userAgent: s.userAgent,
-          watchedSeconds,
+          watchedSeconds,   // wall-clock time actually spent watching
+          contentSeconds,   // seconds of video content consumed (handles >1x speed)
           videoDuration,
-          watchedPct,
+          watchedPct,       // unique % of the timeline seen
           lastPosition: curPos,
+          maxPosition,      // furthest point reached (retention / where they left)
+          avgRate,          // average playback speed
           updatedAt: new Date(now),
         },
         $setOnInsert: { sid, startPosition: Number(s.startPosition) || 0, startedAt: new Date(s.startedAt) },
@@ -286,7 +329,7 @@ async function watchBeat(req, res) {
       { upsert: true },
     );
 
-    res.json({ watchedSeconds, watchedPct, videoDuration, position: curPos });
+    res.json({ watchedSeconds, contentSeconds, watchedPct, videoDuration, position: curPos });
   } catch (error) {
     console.error('Error recording watch beat:', error);
     res.status(500).json({ error: 'Internal server error' });

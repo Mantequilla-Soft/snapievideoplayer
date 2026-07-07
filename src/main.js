@@ -1137,7 +1137,8 @@ async function startWatchSession(videoData) {
         permlink: videoData.permlink,
         type: videoData.type,
         duration: realDuration,
-        position: (player && isFinite(player.currentTime())) ? player.currentTime() : 0
+        position: (player && isFinite(player.currentTime())) ? player.currentTime() : 0,
+        source: 'player'
       })
     });
     if (!response.ok) return;
@@ -1166,7 +1167,8 @@ function watchBeat(useBeacon) {
   if (!W || !W.sid) return;
   W.lastBeatAt = Date.now(); // throttle before the async call so we don't double-fire
   const position = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
-  const payload = JSON.stringify({ sid: W.sid, token: W.token, position });
+  const rate = (player && player.playbackRate) ? player.playbackRate() : 1;
+  const payload = JSON.stringify({ sid: W.sid, token: W.token, position, rate });
   try {
     if (useBeacon && navigator.sendBeacon) {
       navigator.sendBeacon('/api/watch/beat', new Blob([payload], { type: 'application/json' }));
