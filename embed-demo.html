@@ -166,6 +166,27 @@ send('getCaptionLanguages');                // Get available languages
             </div>
         </div>
 
+        <!-- Scrub Preview Demo -->
+        <div class="demo-section">
+            <h2>0b. Scrub Preview</h2>
+            <p>Hover along the seek bar (desktop) or drag the scrubber (mobile) to see a <strong>YouTube-style low-res thumbnail</strong> of that moment above the timeline. A detached player pinned to the lowest quality renders the frame, so it never interrupts playback. <strong>On by default.</strong></p>
+
+            <div class="responsive-embed">
+                <iframe
+                    src="https://preview-player.okinoko.io/watch?v=gamingnature/finally-lost-control-my-mos-236&mode=iframe&layout=desktop"
+                    frameborder="0"
+                    allow="autoplay; fullscreen"
+                    allowfullscreen>
+                </iframe>
+            </div>
+
+            <div class="code-block">
+                <code>// URL Parameter for the scrub preview:
+&preview=0    // Disable the seek-bar scrub preview
+// Default: enabled (thumbnail shown on hover / drag over the timeline)</code>
+            </div>
+        </div>
+
         <!-- Standard Embed -->
         <div class="demo-section">
             <h2>1. Standard Embed (iframe mode)</h2>

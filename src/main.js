@@ -5,6 +5,7 @@ import qualitySelector from 'videojs-hls-quality-selector';
 import './styles.css';
 import subtitleManager from './subtitleManager';
 import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
+import { createScrubPreview } from './scrubPreview';
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {
@@ -16,6 +17,8 @@ if (!videojs.getPlugin('hlsQualitySelector')) {
 
 // Initialize Video.js player
 let player;
+let scrubPreview = null; // YouTube-style low-res seek-bar preview (created with the player)
+let scrubPreviewEnabled = true; // on by default; disable with ?preview=0/false/no
 let currentVideoData = null;
 let isDebugMode = false;
 let shouldAutoplay = false;
@@ -126,6 +129,20 @@ function initializePlayer() {
   player.hlsQualitySelector({
     displayCurrentQuality: true,
   });
+
+  // YouTube-style scrub preview above the seek bar (only meaningful when the
+  // control bar / seek bar is present). A video already loaded before this
+  // point gets its source applied immediately.
+  if (shouldShowControls && scrubPreviewEnabled) {
+    try {
+      scrubPreview = createScrubPreview(player);
+      if (currentVideoData && currentVideoData.videoUrl) {
+        scrubPreview.setSource(currentVideoData.videoUrl);
+      }
+    } catch (e) {
+      console.warn('Scrub preview init failed:', e);
+    }
+  }
 
   // Setup logo fade behavior
   const logoTopLeft = document.getElementById('logo-top-left');
@@ -1037,7 +1054,8 @@ function getUrlParams() {
     tvmode: params.get('tvmode'), // '1' or 'true' for TV mode (Enter key toggles fullscreen)
     mute: params.get('mute'), // '1' or 'true' to start player muted (parent can unmute via postMessage)
     loop: params.get('loop'), // '1' or 'true' to loop video playback
-    captions: params.get('captions') // '0' or 'false' to disable captions
+    captions: params.get('captions'), // '0' or 'false' to disable captions
+    preview: params.get('preview') // '0' or 'false' to disable the seek-bar scrub preview (on by default)
   };
 }
 
@@ -1244,7 +1262,12 @@ async function loadVideoFromData(videoData) {
 
   player.src(sources);
   player.load();
-  
+
+  // Point the scrub-preview at the same manifest (pinned to lowest rendition).
+  if (scrubPreview && videoData.videoUrl) {
+    scrubPreview.setSource(videoData.videoUrl);
+  }
+
   debugLog('Video sources set', sources);
   
   // Update UI
@@ -1516,7 +1539,7 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, noview, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions } = getUrlParams();
+  const { video, type, noview, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions, preview } = getUrlParams();
 
   skipViewCount = !!noview;
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
@@ -1529,6 +1552,8 @@ document.addEventListener('DOMContentLoaded', async function() {
   shouldShowControls = !['0', 'false', 'no'].includes((controls || '').toLowerCase());
   // Captions are shown by default, disable only if explicitly set to '0' or 'false'
   shouldShowCaptions = !['0', 'false', 'no'].includes((captions || '').toLowerCase());
+  // Scrub preview is on by default, disable only if explicitly set to '0' or 'false'
+  scrubPreviewEnabled = !['0', 'false', 'no'].includes((preview || '').toLowerCase());
 
   // PERFORMANCE: Detect Chrome once at startup (avoid regex on every video load)
   isChrome = /Chrome/.test(navigator.userAgent) && !/Edg|Brave/.test(navigator.userAgent);

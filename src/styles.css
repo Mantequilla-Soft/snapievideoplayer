@@ -836,3 +836,53 @@ body.tv-fullscreen-mode .vjs-tech {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 2px;
 }
+
+/* ── YouTube-style scrub preview (see scrubPreview.js) ─────────────────────
+   A low-res thumbnail that follows the cursor/finger along the seek bar. It's
+   centred on the pointer (JS sets `left`; the transform centres it) and sits
+   just above the control bar. pointer-events:none so it never eats hover. */
+.scrub-preview {
+  position: absolute;
+  bottom: 3.6em;                 /* clear the ~3em control bar */
+  left: 0;
+  transform: translateX(-50%);
+  width: 160px;
+  background: #000;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 6px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 30;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+}
+.scrub-preview.visible { opacity: 1; }
+
+.scrub-preview-video {
+  display: block;
+  width: 160px;
+  height: 90px;                  /* 16:9 */
+  object-fit: cover;
+  background: #000;
+}
+
+.scrub-preview-time {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  font: 600 12px/1 system-ui, -apple-system, sans-serif;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Slightly smaller on narrow/mobile layouts so it never overflows the frame. */
+@media (max-width: 640px) {
+  .scrub-preview { width: 128px; bottom: 3.2em; }
+  .scrub-preview-video { width: 128px; height: 72px; }
+}
