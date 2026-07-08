@@ -174,7 +174,14 @@ async function watchStart(req, res) {
     const heatmapDuration = hmDoc?.duration || durationSec;
     const bucketCount = hmDoc?.bucketCount || BUCKET_COUNT;
 
-    const ip = clientIp(req);
+    // Private mode: the client asks us NOT to store the IP — we keep only the
+    // pseudonymous viewer id it sends. `viewerId` is the distinct-viewer key in
+    // BOTH modes (a stable per-browser id, better than a shared/NAT IP); the `ip`
+    // is retained only for coarse country demographics, and null in private mode.
+    const isPrivate = req.body?.private === true || req.body?.private === 'true';
+    const rawViewerId = String(req.body?.viewerId || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64);
+    const ip = isPrivate ? null : clientIp(req);
+    const viewerId = rawViewerId || ip || null; // prefer the client id; fall back to IP (non-private)
     const userAgent = req.headers['user-agent'] || '';
     const sid = crypto.randomBytes(16).toString('hex');
     const durationMs = Math.round(duration * 1000);
@@ -192,6 +199,8 @@ async function watchStart(req, res) {
       heatmapDuration,     // seconds — stable axis for bucketing
       bucketCount,
       ip,
+      viewerId,
+      private: isPrivate,
       userAgent,
       accumulatedMs: 0,    // wall-clock attention (real seconds spent)
       contentMs: 0,        // video content consumed (playhead advance) — speed-correct
@@ -314,6 +323,8 @@ async function watchBeat(req, res) {
           type: s.type,
           source: s.source || 'player',
           ip: s.ip,
+          viewerId: s.viewerId || s.ip || null,
+          private: !!s.private,
           userAgent: s.userAgent,
           watchedSeconds,   // wall-clock time actually spent watching
           contentSeconds,   // seconds of video content consumed (handles >1x speed)
