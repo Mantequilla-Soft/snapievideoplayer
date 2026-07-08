@@ -16,6 +16,23 @@ if (!videojs.getPlugin('hlsQualitySelector')) {
   videojs.registerPlugin('hlsQualitySelector', qualitySelector);
 }
 
+// Stable pseudonymous per-browser id for watch-duration tracking — the distinct
+// viewer key (more accurate + private than a shared/NAT IP). Persisted so the same
+// browser is one viewer across visits. Sent on every session; with ?private=1 the
+// server keeps ONLY this id and drops the IP.
+function getEmbedViewerId() {
+  try {
+    let id = localStorage.getItem('3speak_viewer_id');
+    if (!id) {
+      id = ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`)
+        .replace(/[^a-zA-Z0-9]/g, '').slice(0, 40);
+      localStorage.setItem('3speak_viewer_id', id);
+    }
+    return id;
+  } catch { return null; }
+}
+
 // Initialize Video.js player
 let player;
 let scrubPreview = null; // YouTube-style low-res seek-bar preview (created with the player)
@@ -1172,7 +1189,9 @@ async function startWatchSession(videoData) {
         type: videoData.type,
         duration: realDuration,
         position: (player && isFinite(player.currentTime())) ? player.currentTime() : 0,
-        source: 'player'
+        source: 'player',
+        viewerId: getEmbedViewerId(),
+        private: ['1', 'true', 'yes'].includes((new URLSearchParams(window.location.search).get('private') || '').toLowerCase())
       })
     });
     if (!response.ok) return;
