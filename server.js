@@ -458,9 +458,18 @@ app.get('/api/embed', async (req, res) => {
     }
     
     // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
-    const thumbnail = video.thumbnail_url 
+    const thumbnail = video.thumbnail_url
       || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`;
-    
+
+    // A finished video's player metadata is effectively immutable — the URLs are
+    // content-addressed IPFS (Qm…/manifest.m3u8) and owner/permlink never change.
+    // Let the browser serve repeats from cache so the player SDK + the view /
+    // watch-duration resolvers don't each re-hit this per navigation or reload.
+    // Placeholders / still-encoding videos DO change (status, progress) → no cache.
+    const cacheable = !result.isPlaceholder
+      && String(video.status || '').toLowerCase() === 'published';
+    res.set('Cache-Control', cacheable ? 'public, max-age=300' : 'no-store');
+
     res.json({
       success: true,
       type: 'embed',
