@@ -157,9 +157,13 @@ const HLS_GATEWAYS = [
   'https://ipfs.3speak.tv',
   'https://ipfs-audio.3speak.tv',
 ];
-// A master manifest is a couple KB — if a gateway can't return it in this window it's
-// effectively unusable for playback, so we treat a slower response as unavailable.
-const HLS_FETCH_TIMEOUT_MS = 5000;
+// How long to wait for a gateway to return the master manifest before treating it as
+// unavailable. The file itself is only a couple KB, but a video that has migrated to
+// COLD IPFS can need a while to resolve the CID the first time (DHT lookup + fetch) —
+// 5s was cutting off slow-but-alive gateways. Kept generous; env-tunable. NB: this
+// only extends waits for gateways that HANG — a 404/502 (a genuinely dead video)
+// still rejects fast, so the watch-page "unavailable" hint isn't much delayed.
+const HLS_FETCH_TIMEOUT_MS = Number(process.env.HLS_FETCH_TIMEOUT_MS) || 15000;
 
 /**
  * GET /hls?u=<encoded upstream master .m3u8 URL>
