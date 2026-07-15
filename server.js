@@ -148,20 +148,38 @@ function codecsHaveVideo(codecs) {
   return /avc1|avc3|hvc1|hev1|vp0?9|av01|dvh1/i.test(codecs || '');
 }
 
+// IPFS gateways to try for a manifest, hot/primary first — same set as getVideoUrls().
+// /hls races these so a video that migrated off the hot zone still plays, while one
+// that's gone everywhere fails FAST instead of hanging on a dead gateway.
+const HLS_GATEWAYS = [
+  'https://hotipfs-3speak-1.b-cdn.net',
+  'https://ipfs-3speak.b-cdn.net',
+  'https://ipfs.3speak.tv',
+  'https://ipfs-audio.3speak.tv',
+];
+// A master manifest is a couple KB — if a gateway can't return it in this window it's
+// effectively unusable for playback, so we treat a slower response as unavailable.
+const HLS_FETCH_TIMEOUT_MS = 5000;
+
 /**
  * GET /hls?u=<encoded upstream master .m3u8 URL>
  *
- * On-the-fly WORKAROUND for the legacy 3Speak encoder bug (~90% of pre-2026 videos):
- * their HLS master playlist declares CODECS="mp4a.40.2" (audio only) and omits the
- * H.264 video codec, so strict players set up an audio-only decoder and the video
- * won't play — even though the segments contain real video.
+ * Two jobs in one tiny proxy:
+ *  1. WORKAROUND for the legacy 3Speak encoder bug (~90% of pre-2026 videos): their
+ *     HLS master declares CODECS="mp4a.40.2" (audio only) and omits the H.264 video
+ *     codec, so strict players build an audio-only decoder and never render the video.
+ *     ONLY when the master declares codecs without a video one, we strip the misleading
+ *     CODECS attribute so the player detects the real codecs from the segments.
+ *  2. GATEWAY RACE: try the hot zone first (the fast common path); if it's gone, race
+ *     every other gateway in parallel and serve the first that answers. A video that
+ *     migrated off the hot zone still plays, and one that's genuinely gone fails FAST
+ *     with a 504 (short per-gateway timeout) instead of the old sequential per-gateway
+ *     stall that could hang ~70s each and hide the "video no longer available" state
+ *     behind a minutes-long spinner.
  *
- * We fetch the master and, ONLY when it declares codecs without a video one, strip the
- * misleading CODECS attribute so the player detects the true codecs from the segments.
- * Relative variant/segment references are absolutised against the upstream URL, so only
- * this tiny master file is proxied — variants + .ts load straight from the CDN as
- * before (CORS unchanged). Correct manifests pass through byte-for-byte. Fail-open: on
- * any error we 302 to the raw manifest, so this can never make playback worse.
+ * Only the master is proxied; variant/segment refs are absolutised to the WINNING
+ * gateway so they load straight from the CDN. Correct manifests pass through
+ * byte-for-byte. Fail-open: a rewrite bug 302s to the reachable manifest.
  */
 app.get('/hls', async (req, res) => {
   const upstream = String(req.query.u || '');
@@ -169,13 +187,47 @@ app.get('/hls', async (req, res) => {
   if (!/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(upstream) || !/\.m3u8(\?|$)/i.test(upstream)) {
     return res.status(400).send('bad manifest url');
   }
+  // The path after /ipfs/ (CID + file) is gateway-independent — try it everywhere.
+  const cidPath = upstream.replace(/^https:\/\/[^/]+\/ipfs\//i, '');
+  const seen = new Set();
+  const candidates = [];
+  for (const gwBase of [upstream.replace(/\/ipfs\/.*$/i, ''), ...HLS_GATEWAYS]) {
+    const u = `${gwBase}/ipfs/${cidPath}`;
+    if (!seen.has(u)) { seen.add(u); candidates.push(u); }
+  }
+
+  const fetchManifest = async (u) => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), HLS_FETCH_TIMEOUT_MS);
+    try {
+      const r = await fetch(u, { redirect: 'follow', signal: ac.signal });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      const text = await r.text();
+      if (!/#EXTM3U/.test(text)) throw new Error('not a manifest');
+      return { url: u, text };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let hit;
   try {
-    const r = await fetch(upstream, { redirect: 'follow' });
-    if (!r.ok) return res.redirect(302, upstream);
-    const text = await r.text();
-    const base = upstream.slice(0, upstream.lastIndexOf('/') + 1);
+    hit = await fetchManifest(candidates[0]);          // hot zone — common, fast path
+  } catch (_) {
+    try {
+      hit = await Promise.any(candidates.slice(1).map(fetchManifest)); // migrated? race the rest
+    } catch (_) {
+      // Every gateway failed → the media is genuinely unreachable. Fail FAST (a 504,
+      // not a redirect to a hanging origin) so the player surfaces its fatal error and
+      // the watch page can show the "no longer available" hint promptly.
+      return res.status(504).send('manifest unreachable on all gateways');
+    }
+  }
+
+  try {
+    const base = hit.url.slice(0, hit.url.lastIndexOf('/') + 1);
     const abs = (u) => { try { return new URL(u, base).href; } catch { return u; } };
-    const fixed = text.split(/\r?\n/).map((line) => {
+    const fixed = hit.text.split(/\r?\n/).map((line) => {
       const t = line.trim();
       if (t.startsWith('#EXT-X-STREAM-INF')) {
         const m = t.match(/CODECS="([^"]*)"/i);
@@ -186,7 +238,7 @@ app.get('/hls', async (req, res) => {
       if (t.startsWith('#')) {
         return line.replace(/URI="([^"]+)"/i, (full, u) => (/^https?:\/\//i.test(u) ? full : `URI="${abs(u)}"`));
       }
-      // A bare relative variant/segment reference → absolute upstream URL.
+      // A bare relative variant/segment reference → absolute winning-gateway URL.
       if (t && !/^https?:\/\//i.test(t)) return abs(t);
       return line;
     }).join('\n');
@@ -194,7 +246,7 @@ app.get('/hls', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=300');
     return res.send(fixed);
   } catch (_) {
-    return res.redirect(302, upstream); // never make it worse than the raw manifest
+    return res.redirect(302, hit.url); // rewrite bug, but this manifest was reachable
   }
 });
 
@@ -437,9 +489,13 @@ app.get('/api/watch', async (req, res) => {
         status: video.status,
         isPlaceholder: result.isPlaceholder,
         videoUrl: proxiedManifest(result.urls.primary),
-        videoUrlFallback1: proxiedManifest(result.urls.fallback1),
-        videoUrlFallback2: proxiedManifest(result.urls.fallback2),
-        videoUrlFallback3: proxiedManifest(result.urls.fallback3),
+        // /hls races every gateway internally, so the player needs no separate fallback
+        // chain. Equal fallbacks make the SDK drop them (it skips any === videoUrl) and
+        // fire its fatal error promptly once the single /hls source is exhausted — that's
+        // what drives the watch page's "no longer available" hint.
+        videoUrlFallback1: proxiedManifest(result.urls.primary),
+        videoUrlFallback2: proxiedManifest(result.urls.primary),
+        videoUrlFallback3: proxiedManifest(result.urls.primary),
         thumbnail: thumbnail,
         duration: video.duration || 0,
         views: video.views || 0,
@@ -462,9 +518,13 @@ app.get('/api/watch', async (req, res) => {
           ? transformIPFSUrl(video.thumbnail)
           : `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`,
         videoUrl: proxiedManifest(result.urls.primary),
-        videoUrlFallback1: proxiedManifest(result.urls.fallback1),
-        videoUrlFallback2: proxiedManifest(result.urls.fallback2),
-        videoUrlFallback3: proxiedManifest(result.urls.fallback3),
+        // /hls races every gateway internally, so the player needs no separate fallback
+        // chain. Equal fallbacks make the SDK drop them (it skips any === videoUrl) and
+        // fire its fatal error promptly once the single /hls source is exhausted — that's
+        // what drives the watch page's "no longer available" hint.
+        videoUrlFallback1: proxiedManifest(result.urls.primary),
+        videoUrlFallback2: proxiedManifest(result.urls.primary),
+        videoUrlFallback3: proxiedManifest(result.urls.primary),
         duration: video.duration || 0,
         views: video.views || 0,
         tags: video.tags_v2 || video.tags || []
@@ -547,9 +607,11 @@ app.get('/api/embed', async (req, res) => {
       status: video.status,
       isPlaceholder: result.isPlaceholder,
       videoUrl: proxiedManifest(result.urls.primary),
-      videoUrlFallback1: proxiedManifest(result.urls.fallback1),
-      videoUrlFallback2: proxiedManifest(result.urls.fallback2),
-      videoUrlFallback3: proxiedManifest(result.urls.fallback3),
+      // /hls races every gateway internally, so equal fallbacks make the SDK drop its
+      // separate chain and fire its fatal error promptly — see the /api/watch blocks.
+      videoUrlFallback1: proxiedManifest(result.urls.primary),
+      videoUrlFallback2: proxiedManifest(result.urls.primary),
+      videoUrlFallback3: proxiedManifest(result.urls.primary),
       thumbnail: thumbnail,
       duration: video.duration || 0,
       views: video.views || 0,
