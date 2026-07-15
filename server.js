@@ -130,6 +130,74 @@ function getVideoUrls(ipfsUrl) {
   };
 }
 
+// Public origin of this player (for building self-referential proxy URLs the browser
+// can reach). Overridable via env; defaults to the preview host.
+const SELF_BASE = (process.env.PUBLIC_BASE_URL || 'https://preview-player.okinoko.io').replace(/\/$/, '');
+
+// Route an HLS master manifest through the /hls rewrite proxy below (which fixes the
+// legacy-encoder codec bug on the fly). Non-m3u8 URLs pass through unchanged.
+function proxiedManifest(url) {
+  if (!url || typeof url !== 'string' || !/\.m3u8(\?|$)/i.test(url)) return url;
+  return `${SELF_BASE}/hls?u=${encodeURIComponent(url)}`;
+}
+
+// True if a CODECS="..." string lists a video codec. Old 3Speak encodes wrongly
+// declared audio only (mp4a) with no avc1, so strict players (Firefox/MSE) built an
+// audio-only decoder and the video never rendered.
+function codecsHaveVideo(codecs) {
+  return /avc1|avc3|hvc1|hev1|vp0?9|av01|dvh1/i.test(codecs || '');
+}
+
+/**
+ * GET /hls?u=<encoded upstream master .m3u8 URL>
+ *
+ * On-the-fly WORKAROUND for the legacy 3Speak encoder bug (~90% of pre-2026 videos):
+ * their HLS master playlist declares CODECS="mp4a.40.2" (audio only) and omits the
+ * H.264 video codec, so strict players set up an audio-only decoder and the video
+ * won't play — even though the segments contain real video.
+ *
+ * We fetch the master and, ONLY when it declares codecs without a video one, strip the
+ * misleading CODECS attribute so the player detects the true codecs from the segments.
+ * Relative variant/segment references are absolutised against the upstream URL, so only
+ * this tiny master file is proxied — variants + .ts load straight from the CDN as
+ * before (CORS unchanged). Correct manifests pass through byte-for-byte. Fail-open: on
+ * any error we 302 to the raw manifest, so this can never make playback worse.
+ */
+app.get('/hls', async (req, res) => {
+  const upstream = String(req.query.u || '');
+  // Only proxy https IPFS-gateway manifests — never an open redirector/SSRF vector.
+  if (!/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(upstream) || !/\.m3u8(\?|$)/i.test(upstream)) {
+    return res.status(400).send('bad manifest url');
+  }
+  try {
+    const r = await fetch(upstream, { redirect: 'follow' });
+    if (!r.ok) return res.redirect(302, upstream);
+    const text = await r.text();
+    const base = upstream.slice(0, upstream.lastIndexOf('/') + 1);
+    const abs = (u) => { try { return new URL(u, base).href; } catch { return u; } };
+    const fixed = text.split(/\r?\n/).map((line) => {
+      const t = line.trim();
+      if (t.startsWith('#EXT-X-STREAM-INF')) {
+        const m = t.match(/CODECS="([^"]*)"/i);
+        if (m && !codecsHaveVideo(m[1])) return line.replace(/,?\s*CODECS="[^"]*"/i, '');
+        return line;
+      }
+      // Relative URI="..." inside a tag (e.g. #EXT-X-MEDIA) → absolute.
+      if (t.startsWith('#')) {
+        return line.replace(/URI="([^"]+)"/i, (full, u) => (/^https?:\/\//i.test(u) ? full : `URI="${abs(u)}"`));
+      }
+      // A bare relative variant/segment reference → absolute upstream URL.
+      if (t && !/^https?:\/\//i.test(t)) return abs(t);
+      return line;
+    }).join('\n');
+    res.set('Content-Type', 'application/vnd.apple.mpegurl');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(fixed);
+  } catch (_) {
+    return res.redirect(302, upstream); // never make it worse than the raw manifest
+  }
+});
+
 /**
  * Convert thumbnail reference to CDN or HTTPS URL
  * Handles: HTTPS URLs (pass-through), IPFS CIDs (conversion), and missing values (fallback)
@@ -368,10 +436,10 @@ app.get('/api/watch', async (req, res) => {
         title: video.originalFilename || `${video.owner}/${video.permlink}`,
         status: video.status,
         isPlaceholder: result.isPlaceholder,
-        videoUrl: result.urls.primary,
-        videoUrlFallback1: result.urls.fallback1,
-        videoUrlFallback2: result.urls.fallback2,
-        videoUrlFallback3: result.urls.fallback3,
+        videoUrl: proxiedManifest(result.urls.primary),
+        videoUrlFallback1: proxiedManifest(result.urls.fallback1),
+        videoUrlFallback2: proxiedManifest(result.urls.fallback2),
+        videoUrlFallback3: proxiedManifest(result.urls.fallback3),
         thumbnail: thumbnail,
         duration: video.duration || 0,
         views: video.views || 0,
@@ -393,10 +461,10 @@ app.get('/api/watch', async (req, res) => {
         thumbnail: video.thumbnail
           ? transformIPFSUrl(video.thumbnail)
           : `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`,
-        videoUrl: result.urls.primary,
-        videoUrlFallback1: result.urls.fallback1,
-        videoUrlFallback2: result.urls.fallback2,
-        videoUrlFallback3: result.urls.fallback3,
+        videoUrl: proxiedManifest(result.urls.primary),
+        videoUrlFallback1: proxiedManifest(result.urls.fallback1),
+        videoUrlFallback2: proxiedManifest(result.urls.fallback2),
+        videoUrlFallback3: proxiedManifest(result.urls.fallback3),
         duration: video.duration || 0,
         views: video.views || 0,
         tags: video.tags_v2 || video.tags || []
@@ -478,10 +546,10 @@ app.get('/api/embed', async (req, res) => {
       title: video.originalFilename || `${video.owner}/${video.permlink}`,
       status: video.status,
       isPlaceholder: result.isPlaceholder,
-      videoUrl: result.urls.primary,
-      videoUrlFallback1: result.urls.fallback1,
-      videoUrlFallback2: result.urls.fallback2,
-      videoUrlFallback3: result.urls.fallback3,
+      videoUrl: proxiedManifest(result.urls.primary),
+      videoUrlFallback1: proxiedManifest(result.urls.fallback1),
+      videoUrlFallback2: proxiedManifest(result.urls.fallback2),
+      videoUrlFallback3: proxiedManifest(result.urls.fallback3),
       thumbnail: thumbnail,
       duration: video.duration || 0,
       views: video.views || 0,
