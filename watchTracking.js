@@ -7,15 +7,23 @@
  * Watch time can NEVER be trusted from a single client-reported number (trivially
  * forged with curl). Instead:
  *   1. POST /api/watch/start → opens a server-side session bound to
- *      (sid, owner, permlink, ip) via an HMAC token, returns a heartbeat interval.
+ *      (sid, owner, permlink) via an HMAC token, returns a heartbeat interval.
  *   2. POST /api/watch/beat  → sent every ~BEAT_SECONDS while the video is really
  *      playing (plus a final beat on pause/end/tab-hide). Each beat reports the
  *      current playback `position`. The server credits only the wall-clock gap it
  *      measures between beats (clamped) for the watched-seconds total, AND fills
  *      the timeline buckets the playhead actually traversed since the last beat.
  *
+ * PRIVACY: no viewer IP is stored, anywhere. The IP is resolved to an ISO country
+ * code on ingest (local GeoLite2 DB, no network call) and then discarded within
+ * the request. A session is identified only by `sid` — 16 random server-issued
+ * bytes that live in a client-side JS variable for the length of one watch and are
+ * never written to the viewer's device. Nothing survives a reload, so no
+ * cross-visit viewing profile can form. (Rows written before 2026-07-14 may still
+ * carry `ip`/`viewerId`; scripts/migrate-drop-ips.cjs backfills and removes them.)
+ *
  * Two durable stores:
- *   • `view-durations` — one upserted row per session: video, viewer IP, watched
+ *   • `view-durations` — one upserted row per session: video, country, watched
  *     seconds, % of duration, plus WHERE the session started (startPosition) and
  *     the last position seen (lastPosition).
  *   • `view-heatmaps`  — one aggregate doc per video: a fixed-size `buckets`
@@ -32,6 +40,7 @@
  */
 
 const crypto = require('crypto');
+const geoip = require('geoip-lite');
 const db = require('./db');
 
 const LOG_COLLECTION = process.env.WATCH_LOG_COLLECTION || 'view-durations';
@@ -60,7 +69,11 @@ async function ensureIndexes() {
     const log = database.collection(LOG_COLLECTION);
     await log.createIndex({ sid: 1 }, { unique: true });     // one row per session
     await log.createIndex({ owner: 1, permlink: 1, updatedAt: -1 }); // per-video reporting
-    await log.createIndex({ ip: 1, updatedAt: -1 });                 // per-IP reporting
+    await log.createIndex({ owner: 1, country: 1 });                 // country demographics
+    // The old { ip: 1, updatedAt: -1 } "per-IP reporting" index is gone along with
+    // the field. Drop it if this process meets a database that still has it —
+    // createIndex() alone would leave the old one in place.
+    await log.dropIndex('ip_1_updatedAt_-1').catch(() => { /* already gone */ });
     const sess = database.collection(SESSION_COLLECTION);
     await sess.createIndex({ sid: 1 }, { unique: true });
     await sess.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL cleanup
@@ -74,6 +87,11 @@ async function ensureIndexes() {
 
 // Real client IP — the player sits behind nginx which sets X-Real-IP /
 // X-Forwarded-For. Fall back to the socket address for direct hits.
+//
+// The IP is read, used, and dropped inside a single request: it is resolved to a
+// country by countryOf() below and NEVER persisted — not to `view-durations`, not
+// to the ephemeral `view-sessions`, not to the HMAC token. Nothing downstream can
+// recover it.
 function clientIp(req) {
   const xri = req.headers['x-real-ip'];
   if (xri) return String(xri).trim();
@@ -82,9 +100,32 @@ function clientIp(req) {
   return req.socket?.remoteAddress || req.ip || 'unknown';
 }
 
-function sessionToken(sid, owner, permlink, ip) {
+// ISO 3166-1 alpha-2 country for an IP, resolved ON INGEST via a LOCAL MaxMind
+// GeoLite2 database bundled with geoip-lite. No network call, no third-party
+// processor, nothing leaves the box. Returns null when the IP can't be placed
+// (private range, unknown block) — an unlocatable view is simply not counted
+// against any country.
+function countryOf(ip) {
+  if (!ip || ip === 'unknown') return null;
+  try {
+    const g = geoip.lookup(ip);
+    return (g && g.country) ? g.country : null;
+  } catch {
+    return null;
+  }
+}
+
+// Binds the heartbeat token to the session, NOT to the viewer's IP.
+//
+// The IP used to be in this HMAC, which forced us to keep it in the session row
+// to re-derive the token on each beat. It bought little: the threat is a forged
+// watch-time number, and a forger uses their own IP anyway. The real defence is
+// unchanged — the server credits only the wall-clock gap it measures between
+// beats, clamped by MAX_BEAT_CREDIT_MS. `sid` is 16 random bytes and the secret
+// is per-process, so the token is still unguessable.
+function sessionToken(sid, owner, permlink) {
   return crypto.createHmac('sha256', SESSION_SECRET)
-    .update(`${sid}.${owner}.${permlink}.${ip}`).digest('hex');
+    .update(`${sid}.${owner}.${permlink}`).digest('hex');
 }
 function tokenMatches(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
@@ -174,14 +215,18 @@ async function watchStart(req, res) {
     const heatmapDuration = hmDoc?.duration || durationSec;
     const bucketCount = hmDoc?.bucketCount || BUCKET_COUNT;
 
-    // Private mode: the client asks us NOT to store the IP — we keep only the
-    // pseudonymous viewer id it sends. `viewerId` is the distinct-viewer key in
-    // BOTH modes (a stable per-browser id, better than a shared/NAT IP); the `ip`
-    // is retained only for coarse country demographics, and null in private mode.
+    // Geolocate on ingest, then throw the IP away. `country` (ISO-3166 alpha-2) is
+    // the ONLY thing derived from it that we keep — an aggregate statistic, not
+    // personal data. The raw IP never reaches Mongo.
+    //
+    // Private mode additionally suppresses the country, so a private-mode viewer
+    // contributes nothing to the creator's demographics at all.
+    //
+    // NOTE: any `viewerId` an older cached client still sends is deliberately
+    // IGNORED. It was a persistent localStorage device id; keeping it would let a
+    // stale client keep building a cross-visit viewing profile server-side.
     const isPrivate = req.body?.private === true || req.body?.private === 'true';
-    const rawViewerId = String(req.body?.viewerId || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64);
-    const ip = isPrivate ? null : clientIp(req);
-    const viewerId = rawViewerId || ip || null; // prefer the client id; fall back to IP (non-private)
+    const country = isPrivate ? null : countryOf(clientIp(req));
     const userAgent = req.headers['user-agent'] || '';
     const sid = crypto.randomBytes(16).toString('hex');
     const durationMs = Math.round(duration * 1000);
@@ -198,8 +243,7 @@ async function watchStart(req, res) {
       durationMs,
       heatmapDuration,     // seconds — stable axis for bucketing
       bucketCount,
-      ip,
-      viewerId,
+      country,             // ISO-3166 alpha-2, resolved on ingest; the IP is gone
       private: isPrivate,
       userAgent,
       accumulatedMs: 0,    // wall-clock attention (real seconds spent)
@@ -218,7 +262,7 @@ async function watchStart(req, res) {
 
     res.json({
       sid,
-      token: sessionToken(sid, owner, keyPermlink, ip),
+      token: sessionToken(sid, owner, keyPermlink),
       beatSeconds: BEAT_SECONDS,
     });
   } catch (error) {
@@ -245,7 +289,7 @@ async function watchBeat(req, res) {
     if (!s) return res.status(410).json({ error: 'no_session' });
 
     // Token is bound to the session's video + the IP seen at start.
-    if (!tokenMatches(token, sessionToken(sid, s.owner, s.permlink, s.ip))) {
+    if (!tokenMatches(token, sessionToken(sid, s.owner, s.permlink))) {
       return res.status(403).json({ error: 'bad_token' });
     }
 
@@ -322,8 +366,7 @@ async function watchBeat(req, res) {
           permlink: s.permlink,
           type: s.type,
           source: s.source || 'player',
-          ip: s.ip,
-          viewerId: s.viewerId || s.ip || null,
+          country: s.country ?? null,   // ISO-3166 alpha-2; no IP is ever written here
           private: !!s.private,
           userAgent: s.userAgent,
           watchedSeconds,   // wall-clock time actually spent watching
