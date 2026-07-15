@@ -163,7 +163,13 @@ const HLS_GATEWAYS = [
 // 5s was cutting off slow-but-alive gateways. Kept generous; env-tunable. NB: this
 // only extends waits for gateways that HANG — a 404/502 (a genuinely dead video)
 // still rejects fast, so the watch-page "unavailable" hint isn't much delayed.
-const HLS_FETCH_TIMEOUT_MS = Number(process.env.HLS_FETCH_TIMEOUT_MS) || 15000;
+const HLS_FETCH_TIMEOUT_MS = (() => {
+  // Robust against a missing/blank/garbage/negative override — anything that isn't a
+  // sane positive number (≥1s) falls back to the default rather than, say, a negative
+  // that would fire the abort immediately and mark every video unavailable.
+  const n = Number(process.env.HLS_FETCH_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 1000 ? n : 15000;
+})();
 
 /**
  * GET /hls?u=<encoded upstream master .m3u8 URL>
