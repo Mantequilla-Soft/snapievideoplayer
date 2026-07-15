@@ -168,7 +168,7 @@ const HLS_FETCH_TIMEOUT_MS = (() => {
   // sane positive number (≥1s) falls back to the default rather than, say, a negative
   // that would fire the abort immediately and mark every video unavailable.
   const n = Number(process.env.HLS_FETCH_TIMEOUT_MS);
-  return Number.isFinite(n) && n >= 1000 ? n : 15000;
+  return Number.isFinite(n) && n >= 1000 ? n : 7500;
 })();
 
 /**
