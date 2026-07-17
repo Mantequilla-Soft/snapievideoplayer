@@ -26,6 +26,7 @@
     "express": "^5.1.0",
     "geoip-lite": "^1.4.10",
     "hls.js": "^1.5.17",
+    "livekit-client": "^2.20.1",
     "mongodb": "^7.0.0",
     "video.js": "^8.10.0",
     "videojs-contrib-quality-levels": "^4.1.0",

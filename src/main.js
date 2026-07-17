@@ -1067,6 +1067,12 @@ function getUrlParams() {
     video: params.get('v'),
     type,
     noview,
+    // Live OpenPods playback: `?live=<roomName>` streams a running standalone
+    // OpenPods session over WebRTC (LiveKit) instead of HLS. `api`/`lk` let an
+    // embedder point at a different hangouts API / LiveKit server.
+    live: params.get('live') || params.get('room'),
+    api: params.get('api'), // hangouts API base override (default preview)
+    lk: params.get('lk'), // LiveKit ws URL override (default preview)
     mode: params.get('mode'), // 'iframe' for minimal embedding UI
     layout: params.get('layout'), // 'mobile', 'square', or 'desktop' (default)
     debug: params.get('debug'),
@@ -1104,6 +1110,24 @@ async function fetchVideoData(videoParam, type) {
   } catch (error) {
     console.error('Error fetching video:', error);
     throw error;
+  }
+}
+
+// When there's no video entry for `v`, ask our own backend to resolve it as a
+// live OpenPods stream. The backend probes the configured stream endpoints
+// (STREAM_ENDPOINTS env) and returns { found, roomName, api, lk, host, … } so
+// the embed URL stays identical to any other video and integrators change
+// nothing — the player does all the routing.
+async function resolveStream(videoParam) {
+  if (!videoParam) return null;
+  try {
+    const res = await fetch(`/api/stream?v=${encodeURIComponent(videoParam)}`);
+    // Parse the body even on 404 — a miss may still carry { endedStream: true }
+    // when the id is a stream POST whose room has already closed.
+    return await res.json().catch(() => null);
+  } catch (error) {
+    debugLog('Stream resolve failed', error?.message);
+    return null;
   }
 }
 
@@ -1498,18 +1522,80 @@ function updateViewCount(count) {
 }
 
 // Show error message
-function showError(message) {
-  const container = document.querySelector('.container');
-  if (container) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-message';
-    errorDiv.innerHTML = `
-      <h2>⚠️ Error Loading Video</h2>
-      <p>${message}</p>
-    `;
-    container.insertBefore(errorDiv, container.firstChild);
+// Chrome-less, centered message covering the whole player frame — no bright red
+// banner, no play button/controls, with the 3Speak logo kept top-left. Fills
+// the iframe viewport (position:fixed) so it stays visible even in iframe mode,
+// where .player-wrapper has min-height:0 and collapses once the (uninitialized)
+// video is hidden. Used for BOTH live-stream states ("already ended") and video
+// load failures.
+function renderCenteredOverlay(message, stateLabel, subText) {
+  const wrapper = document.querySelector('.player-wrapper');
+
+  // Hide the video + any leftover chrome so no play button, control bar, LIVE
+  // badge or "Connecting…" text shows behind the message. We draw our own logo
+  // into the overlay, so the wrapper's copy is removed to avoid a double.
+  const video = document.getElementById('snapie-player');
+  if (video) {
+    video.removeAttribute('controls');
+    video.classList.remove('video-js', 'vjs-default-skin');
+    video.style.display = 'none';
   }
-  updatePlayerState('Error');
+  if (wrapper) {
+    wrapper.querySelectorAll('.player-logo, .live-badge, .live-viewers, .live-placeholder, .live-unmute')
+      .forEach((n) => n.remove());
+    wrapper.style.background = '#000';
+  }
+
+  document.querySelector('.player-message')?.remove();
+  const box = document.createElement('div');
+  box.className = 'player-message';
+  Object.assign(box.style, {
+    position: 'fixed', inset: '0', zIndex: '999',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    textAlign: 'center', padding: '0 24px',
+    fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+    color: '#e6e6e6', background: '#000',
+  });
+
+  // 3Speak logo, kept top-left.
+  const logo = document.createElement('img');
+  logo.src = '/assets/legacyLogo3Speaksmall.png';
+  logo.alt = '3Speak';
+  Object.assign(logo.style, {
+    position: 'absolute', top: '12px', left: '12px',
+    width: '25px', height: 'auto', opacity: '0.85', pointerEvents: 'none',
+  });
+  box.appendChild(logo);
+
+  const text = document.createElement('span');
+  Object.assign(text.style, { fontSize: '16px', fontWeight: '600' });
+  text.textContent = message;
+  box.appendChild(text);
+
+  // Optional debug sub-line (e.g. the `v` param) — non-bold, muted, below.
+  if (subText) {
+    const sub = document.createElement('span');
+    Object.assign(sub.style, {
+      marginTop: '6px', fontSize: '13px', fontWeight: '400',
+      color: '#8a8a8a', wordBreak: 'break-all',
+    });
+    sub.textContent = subText;
+    box.appendChild(sub);
+  }
+
+  document.body.appendChild(box);
+  updatePlayerState(stateLabel || 'Error');
+}
+
+// Live-stream state (e.g. "This stream has already ended").
+function showPlayerMessage(message, subText) {
+  renderCenteredOverlay(message, 'Ended', subText);
+}
+
+// Video load failure — same clean centered card as the live states (replaces
+// the old bright-red banner).
+function showError(message, subText) {
+  renderCenteredOverlay(message, 'Error', subText);
 }
 
 // Show codec/decode error overlay
@@ -1568,7 +1654,37 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, noview, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions, preview, heatmap } = getUrlParams();
+  const { video, type, noview, live, api, lk, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions, preview, heatmap } = getUrlParams();
+
+  // Live OpenPods session (`?live=<roomName>`) takes a completely separate
+  // path: a WebRTC/LiveKit viewer, NOT the Video.js/HLS pipeline. Branch out
+  // before any HLS player init so nothing below runs for the live case.
+  if (live) {
+    isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
+    if (mode === 'iframe') {
+      document.body.classList.add('iframe-mode');
+      document.documentElement.classList.add('iframe-mode');
+    }
+    if (layout) document.body.classList.add(`layout-${layout}`);
+    if (noscroll === '1' || noscroll === 'true') {
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+    }
+    try {
+      // Dynamic import so livekit-client is code-split out of the main HLS
+      // bundle — it only downloads when someone actually watches a live pod.
+      const { initLiveSession } = await import('./live.js');
+      await initLiveSession({
+        roomName: live,
+        apiBase: api,
+        lkUrl: lk,
+        muted: ['1', 'true', 'yes'].includes((mute || '').toLowerCase()),
+      });
+    } catch (error) {
+      showError(error?.message || 'Could not start the live session');
+    }
+    return;
+  }
 
   skipViewCount = !!noview;
   isDebugMode = ['1', 'true', 'yes', 'debug'].includes((debug || '').toLowerCase());
@@ -1613,15 +1729,92 @@ document.addEventListener('DOMContentLoaded', async function() {
   
   debugLog('Body class list before init', document.body.className);
 
-  // 2. NOW: Initialize the player (it can now detect layout classes correctly)
+  if (!video) {
+    showError('No video specified. URL should be: /watch?v=owner/permlink or /embed?v=owner/permlink');
+    return;
+  }
+
+  // 2. Decide video-vs-stream BEFORE touching Video.js — same `?v=` URL for
+  //    both, so integrators change nothing. A video is always "owner/permlink"
+  //    (has a slash); a live OpenPods room name never does. So a slash-less id
+  //    IS a stream: resolve it across the configured endpoints, and if nothing
+  //    answers, the stream has ended. A live stream uses a WebRTC pipeline and
+  //    must NOT initialize Video.js.
+  const looksLikeStream = !video.includes('/');
+
+  if (looksLikeStream) {
+    debugLog('Slash-less id → treating as a live stream', video);
+    const stream = await resolveStream(video);
+    if (stream && stream.found) {
+      debugLog('Live stream resolved', stream);
+      try {
+        const { initLiveSession } = await import('./live.js');
+        await initLiveSession({
+          roomName: stream.roomName,
+          apiBase: stream.api,
+          lkUrl: stream.lk,
+          host: stream.host,
+          muted: shouldStartMuted,
+        });
+      } catch (e) {
+        showPlayerMessage(e?.message || 'Could not start the live session');
+      }
+      return;
+    }
+    showPlayerMessage('This stream has already ended');
+    return;
+  }
+
+  // 3. Has a slash → normally a regular video ("owner/permlink"). But a live
+  //    OpenPods announcement embeds as "host/roomName" too (peakd/ecency and our
+  //    own PostView build the player from video.info.author + video.info.permlink),
+  //    so if there's no video entry, probe the stream endpoints once before
+  //    giving up. A resolved stream uses the WebRTC path (no Video.js).
+  debugLog('Beginning video load', { type, video });
+  let videoData = null;
+  let videoError = null;
+  try {
+    videoData = await fetchVideoData(video, type);
+  } catch (error) {
+    videoError = error;
+  }
+
+  if (!videoData) {
+    const stream = await resolveStream(video);
+    if (stream && stream.found) {
+      debugLog('Live stream resolved from owner/room id', stream);
+      try {
+        const { initLiveSession } = await import('./live.js');
+        await initLiveSession({
+          roomName: stream.roomName,
+          apiBase: stream.api,
+          lkUrl: stream.lk,
+          host: stream.host,
+          muted: shouldStartMuted,
+        });
+      } catch (e) {
+        showPlayerMessage(e?.message || 'Could not start the live session');
+      }
+      return;
+    }
+    // It was a stream POST, but the room has closed → "already ended", not
+    // "video not found".
+    if (stream && stream.endedStream) {
+      showPlayerMessage('This stream has already ended', video);
+      return;
+    }
+    // Neither a video nor a live stream — surface the id for later debugging.
+    showError(videoError?.message || 'Video not found', video);
+    return;
+  }
+
+  //    NOW initialize Video.js (it can detect layout classes correctly) and
+  //    wire captions / TV mode.
   initializePlayer();
 
-  // 3. Initialize captions if enabled
   if (shouldShowCaptions) {
     subtitleManager.init(onSubtitleUpdate);
     initCaptionUI(player);
-
-    // Update subtitle overlay on timeupdate
     player.on('timeupdate', function() {
       if (subtitleManager.cues.length > 0) {
         updateOverlay(player.currentTime());
@@ -1647,18 +1840,8 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
     }, true); // capture phase
   }
-  
-  if (!video) {
-    showError('No video specified. URL should be: /watch?v=owner/permlink or /embed?v=owner/permlink');
-    return;
-  }
-  
-  debugLog('Beginning video load', { type, video });
-  
-  try {
-    // Fetch video data from API
-    const videoData = await fetchVideoData(video, type);
 
+  try {
     // Load video into player
     await loadVideoFromData(videoData);
 
@@ -1668,7 +1851,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
   } catch (error) {
-    showError(error.message);
+    showError(error.message, video);
   }
 });
 
