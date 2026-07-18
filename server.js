@@ -134,6 +134,66 @@ function getVideoUrls(ipfsUrl) {
 // can reach). Overridable via env; defaults to the preview host.
 const SELF_BASE = (process.env.PUBLIC_BASE_URL || 'https://preview-player.okinoko.io').replace(/\/$/, '');
 
+// Live OpenPods stream endpoints, probed (in order) when a `?v=` has no video
+// entry. Same URL scheme as any embed — the player resolves video-vs-stream so
+// integrators change nothing. Env `STREAM_ENDPOINTS` is a comma-separated list
+// of "apiBase|livekitWsUrl" pairs; defaults cover preview (okinoko) + the
+// official public hangouts API.
+const STREAM_ENDPOINTS = (process.env.STREAM_ENDPOINTS
+  || 'https://hangouts.okinoko.io|wss://livekit.okinoko.io,https://hangout-api.3speak.tv|wss://livekit.3speak.tv')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((pair) => {
+    const [api, lk] = pair.split('|').map((x) => (x || '').trim());
+    return { api: (api || '').replace(/\/$/, ''), lk: lk || '' };
+  })
+  .filter((e) => e.api && e.lk);
+
+// fetch with an abort timeout (Node 18+/22 global fetch).
+async function fetchJsonWithTimeout(url, timeoutMs = 4000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { signal: ac.signal, headers: { Accept: 'application/json' } });
+    if (!r.ok) return { ok: false, status: r.status, data: null };
+    return { ok: true, status: r.status, data: await r.json() };
+  } catch {
+    return { ok: false, status: 0, data: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Hive RPC endpoint used to tell an ended OpenPods stream (a `video.live` post
+// whose room is gone) apart from a genuinely missing video.
+const HIVE_API = process.env.HIVE_API || 'https://api.hive.blog';
+
+// True when author/permlink is an OpenPods stream POST (json_metadata.video.live).
+async function isEndedStreamPost(author, permlink) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 4000);
+  try {
+    const r = await fetch(HIVE_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'condenser_api.get_content', params: [author, permlink], id: 1 }),
+      signal: ac.signal,
+    });
+    if (!r.ok) return false;
+    const j = await r.json();
+    const post = j?.result;
+    if (!post || !post.author) return false;
+    let meta = {};
+    try { meta = JSON.parse(post.json_metadata || '{}'); } catch { /* not JSON */ }
+    return !!meta?.video?.live;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Route an HLS master manifest through the /hls rewrite proxy below (which fixes the
 // legacy-encoder codec bug on the fly). Non-m3u8 URLs pass through unchanged.
 function proxiedManifest(url) {
@@ -741,6 +801,56 @@ app.post('/api/watch/beat', watchTracking.watchBeat);
 // "most replayed" heatmap above the scrubber.
 app.get('/api/heatmap', watchTracking.getHeatmap);
 
+// GET /api/stream?v=<id> — resolve a `?v=` that has no video entry to a live
+// OpenPods stream. Probes each configured endpoint for a standalone room
+// matching the id (the raw value or its last path segment, so both a bare
+// room name and an "owner/room" form work). Returns the endpoint's api + lk
+// so the browser connects to the right LiveKit server and mints its own guest
+// token there (keeping the real viewer IP).
+app.get('/api/stream', async (req, res) => {
+  const raw = (req.query.v || req.query.room || '').toString().trim();
+  if (!raw) return res.status(400).json({ found: false, error: 'missing v' });
+
+  const candidates = [...new Set([raw, raw.split('/').pop()].filter(Boolean))];
+
+  for (const ep of STREAM_ENDPOINTS) {
+    // Pull the endpoint's live standalone streams once (cheap, no-store).
+    const streamsRes = await fetchJsonWithTimeout(`${ep.api}/streams`);
+    const liveStreams = Array.isArray(streamsRes.data) ? streamsRes.data : [];
+
+    for (const roomName of candidates) {
+      const roomRes = await fetchJsonWithTimeout(`${ep.api}/rooms/${encodeURIComponent(roomName)}`);
+      const room = roomRes.ok ? roomRes.data : null;
+      if (!room || room.mode !== 'standalone') continue;
+
+      const liveMatch = liveStreams.find((s) => s.name === roomName);
+      return res.json({
+        found: true,
+        live: !!(liveMatch && liveMatch.live),
+        roomName,
+        api: ep.api,
+        lk: ep.lk,
+        host: room.host || (liveMatch && liveMatch.host) || null,
+        title: room.title || room.post?.title || (liveMatch && liveMatch.title) || '',
+        thumbnail: room.backgroundImage || room.post?.thumbnail || (liveMatch && liveMatch.thumbnail) || '',
+      });
+    }
+  }
+
+  // No live room. If the id is a stream POST (a Hive post whose json_metadata
+  // marks it video.live) whose room is gone, it's an ended stream — tell the
+  // client so it says "already ended" rather than "video not found".
+  const authorPermlink = raw.includes('/') ? raw : null;
+  if (authorPermlink) {
+    const [author, permlink] = authorPermlink.split('/');
+    if (author && permlink && await isEndedStreamPost(author, permlink)) {
+      return res.status(404).json({ found: false, endedStream: true });
+    }
+  }
+
+  return res.status(404).json({ found: false });
+});
+
 // Serve landing page for root
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'landing.html'));
@@ -757,12 +867,14 @@ app.get('/debug-mobile.html', (req, res) => {
 // watch duration. Use ?type=legacy for legacy videos (default: embed).
 app.get(['/watch', '/embed', '/play'], (req, res) => {
   const videoParam = req.query.v;
-  
-  // If no video parameter, redirect to landing page
-  if (!videoParam) {
+  // A live OpenPods session is addressed by room, not by a video permlink.
+  const liveParam = req.query.live || req.query.room;
+
+  // If neither a video nor a live session is specified, go to the landing page.
+  if (!videoParam && !liveParam) {
     return res.redirect('/');
   }
-  
+
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
