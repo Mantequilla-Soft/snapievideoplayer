@@ -65,7 +65,9 @@ function initializePlayer() {
   const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) || 
                 /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.platform) ||
+                /iPad|iPhone|iPod/.test(navigator.userAgent);
+
   // Mac OS has strict memory quotas - apply conservative buffer settings for ALL browsers on Mac
   const bufferSettings = isMac ? {
     maxBufferLength: 20,              // Mac: 20 seconds (conservative)
@@ -104,7 +106,7 @@ function initializePlayer() {
       hls: {
         enableLowInitialPlaylist: false,
         smoothQualityChange: true,
-        overrideNative: isSafari && !isMac,  // Only use native on Safari non-Mac (iOS)
+        overrideNative: !(isSafari && isIOS),  // Only use native on iOS Safari; force VHS everywhere else
         ...bufferSettings,
         limitRenditionByPlayerDimensions: false,
         handleManifestRedirects: true,
@@ -113,7 +115,7 @@ function initializePlayer() {
       vhs: {
         enableLowInitialPlaylist: false,
         smoothQualityChange: true,
-        overrideNative: isSafari && !isMac,  // Only use native on Safari non-Mac (iOS)
+        overrideNative: !(isSafari && isIOS),  // Only use native on iOS Safari; force VHS everywhere else
         ...bufferSettings,
         limitRenditionByPlayerDimensions: false,
         handleManifestRedirects: true,
