@@ -345,17 +345,10 @@ function initializePlayer() {
       startWatchSession(currentVideoData);
     }
 
-    // Self-heal duration on first play
+    // Self-heal duration on first play — see maybeHealDuration for why this
+    // isn't just `player.duration()` read synchronously here.
     if (currentVideoData && currentVideoData.type === 'embed' && !player.hasHealedDuration) {
-      const realDuration = player.duration();
-      const storedDuration = currentVideoData.duration || 0;
-      if (realDuration && isFinite(realDuration) && realDuration > 0) {
-        // Heal if stored duration is missing or differs by more than 1 second
-        if (!storedDuration || Math.abs(storedDuration - realDuration) > 1) {
-          healDuration(currentVideoData, realDuration);
-        }
-        player.hasHealedDuration = true;
-      }
+      maybeHealDuration(currentVideoData);
     }
   });
   
@@ -1156,6 +1149,73 @@ async function healDuration(videoData, realDuration) {
   }
 }
 
+// Under HLS/MSE, player.duration() read right at 'play' (which fires right
+// after 'loadedmetadata') can transiently report only the span of segments
+// buffered so far — not the full manifest total — until VHS reconciles it a
+// moment later via 'durationchange'. Reading it synchronously is how a
+// 120s video was self-healed down to 6s in production. This waits for two
+// consecutive equal readings (or a short timeout) before trusting the number.
+function getStableDuration(maxWaitMs = 1500) {
+  return new Promise((resolve) => {
+    const first = player.duration();
+    if (!isFinite(first) || first <= 0) {
+      resolve(undefined);
+      return;
+    }
+
+    let lastSeen = first;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      player.off('durationchange', onChange);
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const onChange = () => {
+      const next = player.duration();
+      if (!isFinite(next) || next <= 0) return;
+      if (next === lastSeen) {
+        // Same value seen twice in a row (this change + the prior baseline) — stable.
+        finish(next);
+      }
+      lastSeen = next;
+    };
+    player.on('durationchange', onChange);
+
+    // No further durationchange within the window — treat the last value seen as stable.
+    const timer = setTimeout(() => finish(lastSeen), maxWaitMs);
+  });
+}
+
+// Self-heal duration on first play, but guarded against the read-too-early
+// race above: growing a missing/zero stored duration is safe to do off a
+// single read (there's nothing to corrupt), but SHRINKING an already-stored
+// duration — the exact shape of the bug — waits for a stabilized reading
+// first, so a transient short buffer-span never overwrites a good value.
+async function maybeHealDuration(videoData) {
+  const storedDuration = videoData.duration || 0;
+  const firstRead = player.duration();
+
+  if (storedDuration && isFinite(firstRead) && firstRead > 0 && firstRead < storedDuration - 1) {
+    // Would shrink the stored duration — get a stabilized reading before acting.
+    const stable = await getStableDuration();
+    player.hasHealedDuration = true;
+    if (stable && isFinite(stable) && stable > 0 && Math.abs(storedDuration - stable) > 1) {
+      healDuration(videoData, stable);
+    }
+    return;
+  }
+
+  if (isFinite(firstRead) && firstRead > 0) {
+    if (!storedDuration || Math.abs(storedDuration - firstRead) > 1) {
+      healDuration(videoData, firstRead);
+    }
+    player.hasHealedDuration = true;
+  }
+}
+
 // Increment view count
 async function incrementViewCount(videoData) {
   try {
@@ -1193,7 +1253,17 @@ async function startWatchSession(videoData) {
   if (!videoData || !videoData.owner || !videoData.permlink) return;
   player.watch = { sid: null, token: null, beatMs: 5000, lastBeatAt: 0, starting: true };
   try {
-    const realDuration = (player && isFinite(player.duration())) ? player.duration() : undefined;
+    // Prefer the STORED duration (from the embed-video doc, via /api/embed or
+    // /api/watch) over a live player.duration() read — reading the DOM/MSE
+    // duration right as playback starts is exactly the race that used to send
+    // a transient ~6s buffer-span instead of the real duration (see
+    // getStableDuration's comment). The stored value is only missing for a
+    // brand-new upload that hasn't been healed yet, so THAT'S the one case
+    // worth waiting on a stabilized live reading for.
+    const storedDuration = videoData.duration;
+    const realDuration = (storedDuration && isFinite(storedDuration) && storedDuration > 0)
+      ? storedDuration
+      : await getStableDuration();
     const response = await fetch('/api/watch/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

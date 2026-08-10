@@ -4,7 +4,17 @@ const TRANSLATE_API_URLS = [
   'https://translate.3speak.tv',
   'https://3speak-translator.okinoko.io'
 ];
+// The CDN is fronted by a specific hot-pinning node — content not yet
+// propagated to IT 500s ("block was not found locally") even though
+// ipfs.3speak.tv already serves it fine. Try the CDN first (fast, direct);
+// on failure go through the checker's proxy rather than fetching
+// ipfs.3speak.tv straight from the browser — that gateway sends
+// `access-control-allow-origin` TWICE on every response, which every real
+// browser rejects outright ("Failed to fetch", confirmed live) even though
+// the value itself is fine. The proxy fetches server-to-server (no CORS
+// involved) and re-serves it with a single, correct header.
 const IPFS_CDN_URL = 'https://hotipfs-3speak-1.b-cdn.net/ipfs';
+const SUBTITLE_PROXY_URL = 'https://checker.3speak.tv/subtitle-proxy';
 
 /** Fetch with fallback — tries each URL in order until one succeeds */
 async function fetchWithFallback(buildUrl) {
@@ -18,6 +28,18 @@ async function fetchWithFallback(buildUrl) {
     }
   }
   return null;
+}
+
+/** Fetch a subtitle CID: direct CDN first, then the checker's proxy */
+async function fetchSubtitleWithFallback(cid) {
+  try {
+    var res = await fetch(IPFS_CDN_URL + '/' + cid);
+    if (res.ok) return await res.text();
+  } catch (err) { /* fall through to the proxy */ }
+
+  var proxyRes = await fetch(SUBTITLE_PROXY_URL + '/' + cid);
+  if (!proxyRes.ok) throw new Error('subtitle-proxy responded ' + proxyRes.status);
+  return await proxyRes.text();
 }
 
 const SUBTITLE_LANG_KEY = '3speak-subtitle-lang';
@@ -134,8 +156,7 @@ const subtitleManager = {
     this._notify();
 
     try {
-      var res = await fetch(IPFS_CDN_URL + '/' + langEntry.cid);
-      var srtText = await res.text();
+      var srtText = await fetchSubtitleWithFallback(langEntry.cid);
       var parsed = parseSrt(srtText);
       // Cues are assumed sorted by start time (SRT spec); binary search depends on this
       subtitleCache[cacheKey] = parsed;
