@@ -159,6 +159,26 @@ async function updateEmbedDuration(owner, permlink, duration) {
   const database = getDb();
   const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
 
+  // NEVER let a self-heal SHRINK an already-plausible stored duration.
+  //
+  // Under HLS/MSE a client can read player.duration() before the manifest is
+  // reconciled and report only the buffered-so-far segment span (a few
+  // seconds) instead of the real total. This endpoint writes straight to the
+  // authoritative embed-video.duration, so one such call permanently corrupts
+  // the video's real length — for the duration badge, feeds and cards, not
+  // just analytics. 109 videos were found corrupted this way before this
+  // guard existed. Growing a missing/zero/too-small duration is still fine
+  // (that's the legitimate self-heal case); shrinking a good one is not.
+  const existing = await collection.findOne(
+    { $or: [{ owner, permlink }, { owner, hive_permlink: permlink }] },
+    { projection: { duration: 1 } },
+  );
+  const current = Number(existing?.duration);
+  if (Number.isFinite(current) && current > 0 && duration < current * 0.5) {
+    console.warn(`[duration] refusing to shrink ${owner}/${permlink}: stored=${current}s proposed=${duration}s`);
+    return false;
+  }
+
   const update = { $set: { duration } };
   let result = await collection.updateOne(
     { owner, permlink },
