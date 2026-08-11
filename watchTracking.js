@@ -139,13 +139,29 @@ function bucketIndex(pos, durationSec, n) {
   return Math.min(n - 1, Math.max(0, i));
 }
 // Resolve + bound the duration used for %/bucketing. The player-reported
-// duration reflects the ACTUAL media timeline the viewer scrubs, so we prefer it
-// (the stored doc value is sometimes stale/wrong); fall back to the doc.
+// duration reflects the ACTUAL media timeline the viewer scrubs, so we prefer
+// it over the stored doc value WHEN they roughly agree — the doc value is
+// sometimes stale/wrong for a genuinely-remuxed video.
+//
+// But under HLS/MSE, a player-reported duration read too early (right at
+// 'play', before VHS reconciles the full manifest) can transiently report
+// only the buffered-so-far segment span — a real production case sent 6s for
+// a 120s video this way. A client duration that's WILDLY smaller than the
+// doc's is far more likely to be that race than a genuinely 20x-shorter
+// remux, so distrust it and fall back to the doc instead of letting a bad
+// client number poison retention/analytics for the whole session.
+const DURATION_DISAGREEMENT_RATIO = 0.5; // client below 50% of the doc value is untrusted
 function resolveDuration(clientDur, docDur) {
   const c = Number(clientDur);
-  if (Number.isFinite(c) && c > 0 && c < 86400) return c;
   const d = Number(docDur);
-  if (Number.isFinite(d) && d > 0 && d < 86400) return d;
+  const docValid = Number.isFinite(d) && d > 0 && d < 86400;
+  const clientValid = Number.isFinite(c) && c > 0 && c < 86400;
+
+  if (clientValid && docValid && c < d * DURATION_DISAGREEMENT_RATIO) {
+    return d; // client is suspiciously short next to a trusted doc value — use the doc
+  }
+  if (clientValid) return c;
+  if (docValid) return d;
   return 0;
 }
 function clampPos(pos, durationSec) {
