@@ -217,6 +217,13 @@ const HLS_GATEWAYS = [
   'https://ipfs.3speak.tv',
   'https://ipfs-audio.3speak.tv',
 ];
+// Gateways that answer us fine server-side but omit `Access-Control-Allow-Origin`, so a
+// browser cannot read them. Serving a manifest whose child URLs point at one of these
+// breaks playback everywhere except Safari — see the tiering in the /hls handler.
+// Verify with: curl -sI -H 'Origin: https://preview.3speak.tv' <gw>/ipfs/<cid>/480p/index.m3u8
+const NON_CORS_GATEWAYS = [
+  'https://ipfs.3speak.tv',
+];
 // How long to wait for a gateway to return the master manifest before treating it as
 // unavailable. The file itself is only a couple KB, but a video that has migrated to
 // COLD IPFS can need a while to resolve the CID the first time (DHT lookup + fetch) —
@@ -280,18 +287,35 @@ app.get('/hls', async (req, res) => {
     }
   };
 
+  // The winning gateway becomes the base for every child URL rewritten below, so it has
+  // to be one the BROWSER can read — not merely one we can reach from the server. Racing
+  // every gateway picks whichever is fastest, and the direct supernode routinely beats
+  // the CDNs while omitting `Access-Control-Allow-Origin`. hls.js then gets CORS-blocked
+  // on the variant/segments, dies, and the player falls back to a native <video> src that
+  // only Safari can decode. So: race only CORS-capable gateways, and keep the rest as a
+  // genuine last resort (playback will likely still fail there, but a manifest beats a 504).
+  const corsOk = (u) => !NON_CORS_GATEWAYS.some((g) => u.startsWith(`${g}/`));
+  const rest = candidates.slice(1);
+  const tiers = [
+    corsOk(candidates[0]) ? [candidates[0]] : null,  // hot zone — common, fast path
+    rest.filter(corsOk),                             // migrated? race the CORS-capable ones
+    candidates.filter((u) => !corsOk(u)),            // last resort: reachable but browser-hostile
+  ].filter((t) => t && t.length);
+
   let hit;
-  try {
-    hit = await fetchManifest(candidates[0]);          // hot zone — common, fast path
-  } catch (_) {
+  for (const tier of tiers) {
     try {
-      hit = await Promise.any(candidates.slice(1).map(fetchManifest)); // migrated? race the rest
-    } catch (_) {
-      // Every gateway failed → the media is genuinely unreachable. Fail FAST (a 504,
-      // not a redirect to a hanging origin) so the player surfaces its fatal error and
-      // the watch page can show the "no longer available" hint promptly.
-      return res.status(504).send('manifest unreachable on all gateways');
-    }
+      hit = tier.length === 1
+        ? await fetchManifest(tier[0])
+        : await Promise.any(tier.map(fetchManifest));
+      break;
+    } catch (_) { /* tier exhausted — fall through to the next */ }
+  }
+  if (!hit) {
+    // Every gateway failed → the media is genuinely unreachable. Fail FAST (a 504,
+    // not a redirect to a hanging origin) so the player surfaces its fatal error and
+    // the watch page can show the "no longer available" hint promptly.
+    return res.status(504).send('manifest unreachable on all gateways');
   }
 
   try {
