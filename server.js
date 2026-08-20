@@ -23,26 +23,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // CONSTANTS
 // ============================================================================
 
-const VIDEO_STATUS = {
-  // Deleted statuses
-  DELETE: 'delete',
-  DELETED: 'deleted',
-  SELF_DELETED: 'self_deleted',
-  
-  // Processing statuses
-  ENCODING_IPFS: 'encoding_ipfs',
-  IPFS_PINNING: 'ipfs_pinning',
-  UPLOADED: 'uploaded',
-  
-  // Failed statuses
-  ENCODING_FAILED: 'encoding_failed',
-  
-  // Ready statuses
-  PUBLISH_LATER: 'publish_later',
-  PUBLISH_MANUAL: 'publish_manual',
-  PUBLISHED: 'published',
-  SCHEDULED: 'scheduled'
-};
+const { VIDEO_STATUS } = require('./videoStatus');
 
 const PLACEHOLDER_TYPE = {
   PROCESSING: 'processing',
