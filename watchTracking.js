@@ -42,6 +42,7 @@
 const crypto = require('crypto');
 const geoip = require('geoip-lite');
 const db = require('./db');
+const { isPlaceholderStatus } = require('./videoStatus');
 
 const LOG_COLLECTION = process.env.WATCH_LOG_COLLECTION || 'view-durations';
 const SESSION_COLLECTION = process.env.WATCH_SESSION_COLLECTION || 'view-sessions';
@@ -197,6 +198,19 @@ async function watchStart(req, res) {
       ? await db.findLegacyVideo(owner, permlink)
       : await db.findEmbedVideo(owner, permlink);
     if (!video) return res.status(404).json({ error: 'Video not found' });
+
+    // A video the player CAN'T serve (deleted / still encoding / failed) does not
+    // produce an error page: getVideoSource() answers with a short PLACEHOLDER
+    // notice clip, currently ~6s. The viewer watches that clip to the end and
+    // leaves, but the duration recorded here is the ORIGINAL video's — so the
+    // session lands in `view-durations` as "6s of a 135s video = 4.4% watched"
+    // and the dead video reads as the worst-retained content on the site, while
+    // dragging down the global mean every other video is scored against.
+    // Measured 2026-08-20: 1121 videos, 3469 sessions, 13% of the whole dataset.
+    // A placeholder view is not a watch, so don't open a session for it.
+    if (isPlaceholderStatus(video.status)) {
+      return res.json({ tracked: false, reason: 'placeholder' });
+    }
 
     const duration = resolveDuration(req.body?.duration, video.duration);
     if (duration <= 0) {
