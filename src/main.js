@@ -7,6 +7,7 @@ import subtitleManager from './subtitleManager';
 import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
 import { createScrubPreview } from './scrubPreview';
 import { createHeatmap } from './heatmapBar';
+import { createAdBreak } from './adBreak';
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {
@@ -28,6 +29,9 @@ let player;
 let scrubPreview = null; // YouTube-style low-res seek-bar preview (created with the player)
 let scrubPreviewEnabled = true; // on by default; disable with ?preview=0/false/no
 let heatmapBar = null; // "most replayed" seek-bar heatmap (created with the player)
+// Server-side ad insertion. Holds the mapping from the player's (stitched) timeline
+// back to content time — see src/adBreak.js for why that matters.
+const adBreak = createAdBreak();
 let heatmapEnabled = true; // on by default; disable with ?heatmap=0/false/no
 let currentVideoData = null;
 let isDebugMode = false;
@@ -345,6 +349,13 @@ function initializePlayer() {
       startWatchSession(currentVideoData);
     }
 
+    // Learn where the cut actually landed. Until this resolves, contentTime() is the
+    // identity — under-reporting the offset for a second beats subtracting a guess.
+    if (adBreak.active && !adBreak.resolved) {
+      adBreak.resolve().then((w) => { if (w) debugLog('Sponsor break at', w); });
+    }
+
+
     // Self-heal duration on first play — see maybeHealDuration for why this
     // isn't just `player.duration()` read synchronously here.
     if (currentVideoData && currentVideoData.type === 'embed' && !player.hasHealedDuration) {
@@ -521,6 +532,11 @@ function initializePlayer() {
     if (W && W.sid && Date.now() - W.lastBeatAt >= W.beatMs) {
       watchBeat();
     }
+
+    // Disclosure. Required by EU and US advertising rules, and rendered in the
+    // player's own chrome rather than as a separate element a filter list could
+    // strip without breaking playback.
+    if (adBreak.active) updateSponsorLabel(adBreak.isInside(currentTime));
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
@@ -1249,6 +1265,50 @@ async function incrementViewCount(videoData) {
 // with watchedSeconds + watchedPct + ip + video. Runs regardless of the view
 // counter — /play tracks duration without counting a view.
 // ---------------------------------------------------------------------------
+/**
+ * Show or hide the Sponsored label over the break.
+ *
+ * Created lazily inside the player element so it inherits fullscreen and sits above
+ * the video. Text comes from the server (`ad.label`) rather than being hardcoded, so
+ * the wording can change without shipping a player build.
+ */
+let sponsorLabelEl = null;
+function updateSponsorLabel(show) {
+  if (!show) {
+    if (sponsorLabelEl) sponsorLabelEl.style.display = 'none';
+    return;
+  }
+  if (!sponsorLabelEl) {
+    const host = player && player.el && player.el();
+    if (!host) return;
+    sponsorLabelEl = document.createElement('div');
+    sponsorLabelEl.className = 'vjs-sponsor-note';
+    host.appendChild(sponsorLabelEl);
+  }
+  const info = adBreak.info || {};
+  sponsorLabelEl.textContent = info.advertiser ? `${info.label} · ${info.advertiser}` : (info.label || 'Sponsored');
+  sponsorLabelEl.style.display = 'block';
+}
+
+/**
+ * Who is watching, if the embedding page told us.
+ *
+ * The player has no session of its own, so this only works when the page passes
+ * `?viewer=<hive account>` — the same shape as the existing `private` flag. Without
+ * it a Pro subscriber cannot be recognised and WILL be shown ads, so any surface
+ * that knows its viewer has to pass this.
+ */
+function viewerAccount() {
+  const v = (new URLSearchParams(window.location.search).get('viewer') || '').trim().toLowerCase();
+  return /^[a-z][a-z0-9.-]{2,15}$/.test(v) ? v : null;
+}
+
+/** Where the viewer is in the CONTENT, with any stitched ad time removed. */
+function playerContentTime() {
+  const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  return adBreak.active ? adBreak.contentTime(t) : t;
+}
+
 async function startWatchSession(videoData) {
   if (!videoData || !videoData.owner || !videoData.permlink) return;
   player.watch = { sid: null, token: null, beatMs: 5000, lastBeatAt: 0, starting: true };
@@ -1272,8 +1332,10 @@ async function startWatchSession(videoData) {
         permlink: videoData.permlink,
         type: videoData.type,
         duration: realDuration,
-        position: (player && isFinite(player.currentTime())) ? player.currentTime() : 0,
+        position: playerContentTime(),
         source: 'player',
+        // Marks the row as ad-free so the inventory forecast stops selling it.
+        premium: adBreak.isPremiumViewer,
         private: ['1', 'true', 'yes'].includes((new URLSearchParams(window.location.search).get('private') || '').toLowerCase())
       })
     });
@@ -1302,7 +1364,10 @@ function watchBeat(useBeacon) {
   const W = player && player.watch;
   if (!W || !W.sid) return;
   W.lastBeatAt = Date.now(); // throttle before the async call so we don't double-fire
-  const position = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  // CONTENT time, not player time. With a spot stitched in, currentTime() runs ahead
+  // of the video by the ad's length, and reporting that would credit ad seconds as
+  // watch time on the creator's video.
+  const position = playerContentTime();
   const rate = (player && player.playbackRate) ? player.playbackRate() : 1;
   const payload = JSON.stringify({ sid: W.sid, token: W.token, position, rate });
   try {
@@ -1343,13 +1408,40 @@ async function loadVideoFromData(videoData) {
     debugLog('No thumbnail available for this video');
   }
 
-  // Set video sources with CDN-first fallback chain
+  // Ask whether this playback carries a sponsor spot. A stitched manifest plays the
+  // ad inline; anything less than a clear yes falls straight through to the content
+  // URL, because no ad is always better than no video.
+  adBreak.reset();
+  let primaryUrl = videoData.videoUrl;
+  try {
+    const stitched = await adBreak.request({
+      owner: videoData.owner,
+      permlink: videoData.permlink,
+      viewer: viewerAccount(),
+      manifestUrl: videoData.videoUrl,
+    });
+    if (stitched) {
+      primaryUrl = stitched;
+      debugLog('Playing with a sponsor break', adBreak.info);
+    }
+    // Exposed under ?debug=1 only. The Sponsored label is driven by timeupdate,
+    // which needs decodable media — so on any browser without H.264 it can never
+    // be exercised. Set here rather than on play for exactly that reason.
+    if (isDebugMode) window.__3sAdDebug = { adBreak, updateSponsorLabel };
+  } catch (_) { /* play the plain video */ }
+
+  // Set video sources with CDN-first fallback chain. The stitched manifest goes
+  // FIRST and the original stays right behind it, so a stitcher outage degrades to
+  // ordinary playback instead of a dead player.
   const sources = [
     {
-      src: videoData.videoUrl,
+      src: primaryUrl,
       type: 'application/x-mpegURL'
     }
   ];
+  if (primaryUrl !== videoData.videoUrl) {
+    sources.push({ src: videoData.videoUrl, type: 'application/x-mpegURL' });
+  }
   
   debugLog('Primary video URL:', videoData.videoUrl);
   
@@ -1383,6 +1475,8 @@ async function loadVideoFromData(videoData) {
 
   // Point the scrub-preview at the same manifest (pinned to lowest rendition).
   if (scrubPreview && videoData.videoUrl) {
+    // Always the original: the stitched playlist is per-session and no-store, and
+    // scrubbing should preview the video, not the sponsor spot.
     scrubPreview.setSource(videoData.videoUrl);
   }
 

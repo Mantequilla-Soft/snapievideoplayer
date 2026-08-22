@@ -212,6 +212,12 @@ async function watchStart(req, res) {
       return res.json({ tracked: false, reason: 'placeholder' });
     }
 
+    // One bit, set by the player when the ad decision said this viewer is a Pro
+    // subscriber. It carries NO identity — it says "this playback was ad-free", which
+    // is what the inventory forecast needs so it stops selling impressions that can
+    // never be served. Without it the forecast quietly oversells to paying users.
+    const premium = req.body?.premium === true;
+
     const duration = resolveDuration(req.body?.duration, video.duration);
     if (duration <= 0) {
       // Can't measure a %/heatmap without a duration.
@@ -274,6 +280,7 @@ async function watchStart(req, res) {
       heatmapDuration,     // seconds — stable axis for bucketing
       bucketCount,
       country,             // ISO-3166 alpha-2, resolved on ingest; the IP is gone
+      premium,             // ad-free playback — excluded from sellable ad inventory
       private: isPrivate,
       userAgent,
       accumulatedMs: 0,    // wall-clock attention (real seconds spent)
@@ -397,6 +404,11 @@ async function watchBeat(req, res) {
           type: s.type,
           source: s.source || 'player',
           country: s.country ?? null,   // ISO-3166 alpha-2; no IP is ever written here
+          // Carried from the session onto the durable row: services/adInventory.js
+          // in the checker filters on it, and it reads THIS collection, not the
+          // ephemeral session one. A Pro subscriber's playback is ad-free, so it is
+          // not inventory and must not be sold.
+          premium: !!s.premium,
           private: !!s.private,
           userAgent: s.userAgent,
           watchedSeconds,   // wall-clock time actually spent watching

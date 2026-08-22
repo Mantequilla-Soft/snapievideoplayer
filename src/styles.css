@@ -913,3 +913,25 @@ body.tv-fullscreen-mode .vjs-tech {
 @media (max-width: 640px) {
   .vjs-replay-heatmap { height: 22px; }
 }
+
+/* Sponsored disclosure, shown only while the playhead is inside an ad break.
+   Deliberately part of the player's own chrome: a separate overlay element would be
+   trivial for a filter list to hide without breaking anything else. */
+.vjs-sponsor-note {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.66);
+  color: #fff;
+  font: 600 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+@media (max-width: 600px) {
+  .vjs-sponsor-note { top: 8px; left: 8px; font-size: 11px; padding: 3px 8px; }
+}
