@@ -536,7 +536,18 @@ function initializePlayer() {
     // Disclosure. Required by EU and US advertising rules, and rendered in the
     // player's own chrome rather than as a separate element a filter list could
     // strip without breaking playback.
-    if (adBreak.active) updateSponsorLabel(adBreak.isInside(currentTime));
+    if (adBreak.active) {
+      const inside = adBreak.isInside(currentTime);
+      updateSponsorLabel(inside);
+      // A mid-roll that arrives with no warning is the part viewers resent most. A
+      // few seconds' notice costs the advertiser nothing and turns an interruption
+      // into a beat. Never while the spot is already playing.
+      const left = inside ? null : adBreak.secondsUntil(currentTime);
+      updateAdCountdown(left != null && left <= AD_COUNTDOWN_FROM ? Math.max(1, Math.ceil(left)) : null);
+    }
+    // The banner is independent of the spot: it can run on a playback with no spot
+    // at all, so it is driven on its own terms.
+    updateBannerClick(adBreak.isBannerVisible(currentTime));
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
@@ -1273,21 +1284,172 @@ async function incrementViewCount(videoData) {
  * the wording can change without shipping a player build.
  */
 let sponsorLabelEl = null;
+let sponsorResumeEl = null;
+let sponsorBuiltFor = null;
+
 function updateSponsorLabel(show) {
   if (!show) {
     if (sponsorLabelEl) sponsorLabelEl.style.display = 'none';
     return;
   }
-  if (!sponsorLabelEl) {
-    const host = player && player.el && player.el();
-    if (!host) return;
-    sponsorLabelEl = document.createElement('div');
-    sponsorLabelEl.className = 'vjs-sponsor-note';
+  const host = player && player.el && player.el();
+  if (!host) return;
+  const info = adBreak.info || {};
+  const brand = info.brand || {};
+
+  // Rebuilt only when the spot changes, not on every timeupdate: the countdown is
+  // the one part that ticks, and it is updated in place below.
+  if (!sponsorLabelEl || sponsorBuiltFor !== info.sid) {
+    if (sponsorLabelEl && sponsorLabelEl.parentNode) sponsorLabelEl.parentNode.removeChild(sponsorLabelEl);
+    sponsorBuiltFor = info.sid;
+
+    // An anchor when there is somewhere to go, a plain div otherwise, so the
+    // overlay never looks clickable while doing nothing. The href points at the
+    // stitcher, which counts the click and then redirects — the advertiser's real
+    // address is never in the page.
+    const clickUrl = brand.clickUrl || null;
+    sponsorLabelEl = document.createElement(clickUrl ? 'a' : 'div');
+    sponsorLabelEl.className = 'vjs-sponsor-note' + (clickUrl ? ' vjs-sponsor-link' : '');
+    if (clickUrl) {
+      sponsorLabelEl.href = clickUrl;
+      sponsorLabelEl.target = '_blank';
+      sponsorLabelEl.rel = 'noopener noreferrer';
+      sponsorLabelEl.setAttribute(
+        'aria-label',
+        'Open ' + (brand.productName || 'the advertiser') + "'s website in a new tab",
+      );
+      // videojs swallows clicks on its own surface, and a click here must never
+      // also toggle play/pause.
+      sponsorLabelEl.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    const from = document.createElement('span');
+    from.className = 'vjs-sponsor-from';
+    from.textContent = brand.account ? 'Advertisement from @' + brand.account : (info.label || 'Sponsored');
+    sponsorLabelEl.appendChild(from);
+
+    if (brand.productName || brand.slogan || brand.logoUrl) {
+      const body = document.createElement('div');
+      body.className = 'vjs-sponsor-body';
+
+      const logo = document.createElement(brand.logoUrl ? 'img' : 'span');
+      logo.className = 'vjs-sponsor-logo';
+      if (brand.logoUrl) { logo.src = brand.logoUrl; logo.alt = ''; logo.loading = 'lazy'; }
+      body.appendChild(logo);
+
+      const text = document.createElement('div');
+      text.className = 'vjs-sponsor-text';
+      if (brand.productName) {
+        const n = document.createElement('strong');
+        n.className = 'vjs-sponsor-name';
+        n.textContent = brand.productName;
+        text.appendChild(n);
+      }
+      if (brand.slogan) {
+        const sl = document.createElement('span');
+        sl.className = 'vjs-sponsor-slogan';
+        sl.textContent = brand.slogan;
+        text.appendChild(sl);
+      }
+      body.appendChild(text);
+      sponsorLabelEl.appendChild(body);
+    }
+
+    sponsorResumeEl = document.createElement('span');
+    sponsorResumeEl.className = 'vjs-sponsor-resume';
+    sponsorLabelEl.appendChild(sponsorResumeEl);
+
     host.appendChild(sponsorLabelEl);
   }
-  const info = adBreak.info || {};
-  sponsorLabelEl.textContent = info.advertiser ? `${info.label} · ${info.advertiser}` : (info.label || 'Sponsored');
-  sponsorLabelEl.style.display = 'block';
+
+  // The wait, ticking in whole seconds. Held at "in a moment" rather than 0: the
+  // last tick is over before the number could be read.
+  const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  const remain = adBreak.secondsRemaining(t);
+  if (sponsorResumeEl) {
+    sponsorResumeEl.textContent = remain == null
+      ? ''
+      : (Math.ceil(remain) > 0 ? 'Video continues in ' + Math.ceil(remain) + 's' : 'Video continues in a moment');
+  }
+
+  sponsorLabelEl.style.display = 'flex';
+}
+
+/** How many seconds of warning a viewer gets before the break. */
+const AD_COUNTDOWN_FROM = 3;
+
+/**
+ * The pre-roll warning: "Ad in 3" counting down to the break.
+ *
+ * Deliberately separate from the disclosure overlay: it appears BEFORE the spot,
+ * belongs to the content the viewer is still watching, and sits in the opposite
+ * corner so it never covers the disclosure that follows it.
+ */
+let adCountdownEl = null;
+function updateAdCountdown(secs) {
+  if (secs == null) {
+    if (adCountdownEl) adCountdownEl.style.display = 'none';
+    return;
+  }
+  if (!adCountdownEl) {
+    const host = player && player.el && player.el();
+    if (!host) return;
+    adCountdownEl = document.createElement('div');
+    adCountdownEl.className = 'vjs-ad-countdown';
+    host.appendChild(adCountdownEl);
+  }
+  adCountdownEl.textContent = 'Ad in ' + secs;
+  adCountdownEl.style.display = 'block';
+}
+
+/**
+ * A click target over the burned-in banner.
+ *
+ * The banner itself is composited into the video by the stitcher, so there is
+ * nothing here to draw — only somewhere to click. Positioned from the placement
+ * percentages the server reports rather than guessed, so the target sits exactly
+ * where the pixels are, and only while the banner is actually on screen.
+ */
+let bannerClickEl = null;
+let bannerBuiltFor = null;
+function updateBannerClick(show) {
+  const info = adBreak.bannerInfo;
+  const clickUrl = info && info.brand && info.brand.clickUrl;
+  if (!show || !clickUrl) {
+    if (bannerClickEl) bannerClickEl.style.display = 'none';
+    return;
+  }
+  if (!bannerClickEl || bannerBuiltFor !== clickUrl) {
+    if (bannerClickEl && bannerClickEl.parentNode) bannerClickEl.parentNode.removeChild(bannerClickEl);
+    const host = player && player.el && player.el();
+    if (!host) return;
+    bannerBuiltFor = clickUrl;
+    bannerClickEl = document.createElement('a');
+    bannerClickEl.className = 'vjs-banner-click';
+    bannerClickEl.href = clickUrl;
+    bannerClickEl.target = '_blank';
+    bannerClickEl.rel = 'noopener noreferrer';
+    bannerClickEl.setAttribute(
+      'aria-label',
+      'Open ' + ((info.brand && info.brand.productName) || info.advertiser || 'the advertiser') + "'s website in a new tab",
+    );
+    // Must not also reach the video surface, or the click toggles play/pause.
+    bannerClickEl.addEventListener('click', (e) => e.stopPropagation());
+
+    const pl = info.placement || {};
+    // Percentages of the FRAME, which is what the stitcher burned against, so the
+    // target tracks the banner through resizes and fullscreen without recalculating.
+    const widthPct = Number(pl.widthPct) || 60;
+    const bottomPct = Number(pl.bottomPct) || 6;
+    const aspect = Number(pl.aspect) || 5.6;
+    const maxHeightPct = Number(pl.maxHeightPct) || 15;
+    bannerClickEl.style.width = widthPct + '%';
+    bannerClickEl.style.bottom = bottomPct + '%';
+    bannerClickEl.style.aspectRatio = String(aspect);
+    bannerClickEl.style.maxHeight = maxHeightPct + '%';
+    host.appendChild(bannerClickEl);
+  }
+  bannerClickEl.style.display = 'block';
 }
 
 /**

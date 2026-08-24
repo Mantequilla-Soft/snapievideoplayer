@@ -53,7 +53,16 @@ const CAP_ID = (() => {
 })();
 
 export function createAdBreak() {
-  let session = null;      // { sid, position, durationSeconds, label, advertiser }
+  let session = null;      // { sid, position, durationSeconds, label, advertiser, brand }
+  // The banner is a SEPARATE placement, from a separate advertiser, and can be
+  // present with or without a spot. It adds no time to the timeline, so it never
+  // affects contentTime(): the picture changes, the clock does not.
+  let banner = null;
+  let bannerWindow = null;
+  // A banner-only playback still has a session to ask /i about, and it is the same
+  // sid, but it is read from the banner's own manifest URL because that is the only
+  // one present in that case.
+  let bannerSid = null;
   let window_ = null;      // { start, duration } in PLAYER time, once resolved
   let premium = false;     // this viewer pays for Pro, so playback is ad-free
 
@@ -64,6 +73,24 @@ export function createAdBreak() {
     /** True when the server said this playback is ad-free because the viewer is Pro. */
     get isPremiumViewer() { return premium; },
 
+    /** The banner running on this playback, or null. */
+    get bannerInfo() { return banner; },
+
+    /**
+     * Is the banner on screen at this moment?
+     *
+     * Measured in CONTENT time, because that is what the banner's position is a
+     * percentage of and what the stitcher burned it against. On a playback that also
+     * carries a spot, player time runs ahead of content time by the length of the
+     * break, so comparing raw player time would put the click target in the wrong
+     * place for exactly as long as the spot lasted.
+     */
+    isBannerVisible(playerTime) {
+      if (!bannerWindow || !isFinite(playerTime)) return false;
+      const t = this.contentTime(playerTime);
+      return t >= bannerWindow.start && t < bannerWindow.start + bannerWindow.duration;
+    },
+
     /**
      * Ask whether this playback carries a spot. Returns the stitched manifest URL,
      * or null to play the content manifest exactly as before.
@@ -71,6 +98,9 @@ export function createAdBreak() {
     async request({ owner, permlink, viewer, country, manifestUrl }) {
       session = null;
       window_ = null;
+      banner = null;
+      bannerWindow = null;
+      bannerSid = null;
       premium = false;
       if (!owner || !permlink || !manifestUrl) return null;
       try {
@@ -86,6 +116,27 @@ export function createAdBreak() {
         premium = data?.premium === true;
         if (!data || !data.ad || !data.ad.manifestUrl) return null;
 
+        // Kept whether or not there is also a spot: a playback can carry a banner
+        // alone, and then the banner's manifest is the one to load.
+        if (data && data.banner && data.banner.manifestUrl) {
+          bannerSid = (data.banner.manifestUrl.match(/\/m\/([0-9a-f]{32})\.m3u8/) || [])[1] || null;
+          banner = {
+            positionPercent: data.banner.positionPercent,
+            durationSeconds: data.banner.durationSeconds,
+            advertiser: data.banner.advertiser || null,
+            brand: data.banner.brand || null,
+            // Where the server burned it, in frame percentages. Never assumed here.
+            placement: data.banner.placement || null,
+            manifestUrl: data.banner.manifestUrl,
+          };
+        }
+
+        if (!data || !data.ad || !data.ad.manifestUrl) {
+          // No spot, but a banner still needs its manifest loaded and its window
+          // resolved, so report the banner's manifest as the thing to play.
+          return banner ? banner.manifestUrl : null;
+        }
+
         const sid = (data.ad.manifestUrl.match(/\/m\/([0-9a-f]{32})\.m3u8/) || [])[1];
         if (!sid) return null;
         session = {
@@ -94,6 +145,9 @@ export function createAdBreak() {
           durationSeconds: data.ad.durationSeconds,
           label: data.ad.label || 'Sponsored',
           advertiser: data.ad.advertiser || null,
+          // Who the ad is from, for the disclosure: logo, product, slogan, and the
+          // click URL. Absent fields are fine — the overlay draws what is there.
+          brand: data.ad.brand || null,
         };
         return data.ad.manifestUrl;
       } catch (_) {
@@ -107,21 +161,50 @@ export function createAdBreak() {
      * the offset briefly than to subtract a number we invented.
      */
     async resolve() {
-      if (!session || window_) return window_;
+      // A banner-only playback has no spot sid, so the id comes from whichever
+      // placement produced the manifest.
+      const sid = (session && session.sid) || bannerSid;
+      if (!sid) return window_;
+      // Keep asking while EITHER window is still missing: a playback can carry both,
+      // and the banner's offsets can land in a later poll than the spot's.
+      if (window_ && (!banner || bannerWindow)) return window_;
       for (let i = 0; i < RESOLVE_TRIES; i += 1) {
         try {
-          const res = await fetch(`${AD_BASE}/m/${session.sid}/i`);
+          const res = await fetch(`${AD_BASE}/m/${sid}/i`);
           if (res.ok) {
             const d = await res.json();
-            if (typeof d.adStartAt === 'number' && d.adDurationSeconds) {
-              window_ = { start: d.adStartAt, duration: d.adDurationSeconds };
-              return window_;
+            if (banner && !bannerWindow
+              && typeof d.bannerStartAt === 'number' && d.bannerDurationSeconds) {
+              bannerWindow = { start: d.bannerStartAt, duration: d.bannerDurationSeconds };
             }
+            if (!window_ && typeof d.adStartAt === 'number' && d.adDurationSeconds) {
+              window_ = { start: d.adStartAt, duration: d.adDurationSeconds };
+            }
+            if ((!session || window_) && (!banner || bannerWindow)) return window_;
           }
         } catch (_) { /* keep trying */ }
         await sleep(RESOLVE_DELAY_MS);
       }
-      return null;
+      return window_;
+    },
+
+    /** Seconds until the break starts, or null when that is not a useful question. */
+    secondsUntil(playerTime) {
+      if (!window_ || !isFinite(playerTime)) return null;
+      const left = window_.start - playerTime;
+      return left > 0 ? left : null;
+    },
+
+    /**
+     * Seconds until the content resumes, or null when not inside the break. Same
+     * window the disclosure and the watch tracker use, so the number on screen can
+     * never disagree with when the video actually comes back.
+     */
+    secondsRemaining(playerTime) {
+      if (!window_ || !isFinite(playerTime)) return null;
+      const { start, duration } = window_;
+      if (playerTime < start || playerTime >= start + duration) return null;
+      return Math.max(0, start + duration - playerTime);
     },
 
     /** Is the playhead inside the break right now? */
@@ -148,6 +231,6 @@ export function createAdBreak() {
     /** How much of the visible timeline is ad, for duration-facing UI. */
     get addedSeconds() { return window_ ? window_.duration : 0; },
 
-    reset() { session = null; window_ = null; premium = false; },
+    reset() { session = null; window_ = null; banner = null; bannerWindow = null; bannerSid = null; premium = false; },
   };
 }
