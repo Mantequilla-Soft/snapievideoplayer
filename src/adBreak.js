@@ -42,6 +42,54 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * would be a viewing profile in all but name, which is exactly what the watch
  * tracking on this player was built to avoid.
  */
+/**
+ * Which ADS this viewer has already been shown recently, so the same advertiser does
+ * not follow them from one video to the next.
+ *
+ * 🚨 Per AD, not per viewer. The server has always capped repeats of the same
+ * campaign, but it keys that on the signed-in name or on CAP_ID — and CAP_ID below is
+ * per PAGE LOAD by design, so without this the cap resets on every reload and one
+ * advertiser can run a whole session. That is exactly what it did here: this player
+ * kept its own copy of adBreak and never sent the list, so the same spot came back
+ * over and over while the watch page had already stopped repeating.
+ *
+ * Stored as opaque `adKey`s with the time each was seen. Not viewing history: it says
+ * which ADVERTS were shown, never which videos were watched, and entries expire on
+ * their own inside the cap window. Sending it can only cost the viewer ads, never
+ * earn them extra, which is why the server accepts it without trusting it.
+ *
+ * ⚠️ Kept in step with preview-3speak/src/lib/adBreak.js by hand, like the rest of
+ * this file — the header explains why the duplication is deliberate. Same storage
+ * key on purpose, so an embed and the watch page share one notion of "already seen".
+ */
+const SEEN_KEY = '3speak-ads-seen';
+const SEEN_MINUTES = 30;   // matches AD_FREQUENCY_CAP_MINUTES on the server
+
+function readSeen() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}');
+    const cutoff = Date.now() - SEEN_MINUTES * 60 * 1000;
+    const out = {};
+    for (const [k, t] of Object.entries(raw)) if (Number(t) > cutoff) out[k] = Number(t);
+    return out;
+  } catch { return {}; }
+}
+
+function recentAdKeys() {
+  return Object.keys(readSeen());
+}
+
+function rememberAdSeen(...keys) {
+  const flat = keys.flat().filter((k) => typeof k === 'string' && k);
+  if (!flat.length) return;
+  try {
+    const seen = readSeen();
+    const now = Date.now();
+    for (const k of flat) seen[k] = now;
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+  } catch { /* storage unavailable — the server still caps a signed-in viewer */ }
+}
+
 const CAP_ID = (() => {
   try {
     const a = new Uint8Array(12);
@@ -109,12 +157,16 @@ export function createAdBreak() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             owner, permlink, viewer: viewer || null, country: country || null, manifestUrl, capId: CAP_ID,
+            recentAdKeys: recentAdKeys(),
           }),
         });
         if (!res.ok) return null;
         const data = await res.json();
         premium = data?.premium === true;
-        if (!data || !data.ad || !data.ad.manifestUrl) return null;
+        // Recorded as soon as the server hands one over, and BEFORE the early return
+        // below: a banner-only playback is still an ad this viewer was shown, and
+        // returning first would have left it out of the cap.
+        rememberAdSeen(data?.ad?.adKey, data?.banner?.adKey);
 
         // Kept whether or not there is also a spot: a playback can carry a banner
         // alone, and then the banner's manifest is the one to load.
