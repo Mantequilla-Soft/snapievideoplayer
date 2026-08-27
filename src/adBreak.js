@@ -259,6 +259,13 @@ export function createAdBreak() {
       return Math.max(0, start + duration - playerTime);
     },
 
+    /** Seconds until the break starts, or null when that is not a useful question. */
+    secondsUntil(playerTime) {
+      if (!window_ || !isFinite(playerTime)) return null;
+      const left = window_.start - playerTime;
+      return left > 0 ? left : null;
+    },
+
     /** Is the playhead inside the break right now? */
     isInside(playerTime) {
       if (!window_ || !isFinite(playerTime)) return false;
