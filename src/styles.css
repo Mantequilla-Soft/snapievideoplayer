@@ -1051,3 +1051,19 @@ body.tv-fullscreen-mode .vjs-tech {
   .vjs-sponsor-name { font-size: 13px; }
   .vjs-sponsor-slogan { font-size: 11px; }
 }
+
+/* ── While a video roll is on screen ──────────────────────────────────────
+   The scrubber goes away for the length of the spot. An advertiser paying for
+   five seconds should not be handed a drag handle straight past them.
+
+   🚨 ROLL ONLY — set from adBreak.isInside(), which reads the roll window. A
+   banner has its own window and is deliberately not wired here: it is painted
+   into the creator's video while that plays normally, so taking the timeline
+   away would be removing a control from ordinary playback.
+
+   Hidden with visibility rather than display so the control bar keeps its
+   height and the buttons either side do not jump as the spot starts and ends. */
+.video-js.vjs-roll-playing .vjs-progress-control {
+  visibility: hidden;
+  pointer-events: none;
+}

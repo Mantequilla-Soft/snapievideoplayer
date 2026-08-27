@@ -539,6 +539,15 @@ function initializePlayer() {
     if (adBreak.active) {
       const inside = adBreak.isInside(currentTime);
       updateSponsorLabel(inside);
+      // Hide the scrubber while the SPOT is on screen. An advertiser paying for a
+      // five-second spot should not be handed a drag handle straight past it, and a
+      // timeline that still moves invites exactly that.
+      //
+      // 🚨 ROLL ONLY. isInside() reads the roll window; a banner has its own
+      // (isBannerVisible) and deliberately does not come through here. A banner is
+      // painted into the creator's video while it plays normally — taking the
+      // timeline away then would be removing a control from ordinary playback.
+      setRollChrome(inside);
       // A mid-roll that arrives with no warning is the part viewers resent most. A
       // few seconds' notice costs the advertiser nothing and turns an interruption
       // into a beat. Never while the spot is already playing.
@@ -1286,6 +1295,17 @@ async function incrementViewCount(videoData) {
 let sponsorLabelEl = null;
 let sponsorResumeEl = null;
 let sponsorBuiltFor = null;
+
+/**
+ * Player chrome while a video roll is on screen. A class on the player root, so the
+ * decision lives in CSS and nothing has to remember which controls were hidden in
+ * order to put them back.
+ */
+function setRollChrome(inside) {
+  const host = player && player.el && player.el();
+  if (!host) return;
+  host.classList.toggle('vjs-roll-playing', !!inside);
+}
 
 function updateSponsorLabel(show) {
   if (!show) {
@@ -2143,7 +2163,17 @@ document.addEventListener('DOMContentLoaded', async function() {
     initCaptionUI(player);
     player.on('timeupdate', function() {
       if (subtitleManager.cues.length > 0) {
-        updateOverlay(player.currentTime());
+        // CONTENT time, not player time. Cues are timed against the creator's video;
+        // a stitched spot pushes everything after it later in the PLAYER's timeline,
+        // so raw currentTime runs every cue early by the length of the spot for the
+        // whole rest of the video. contentTime() is a no-op when nothing is spliced.
+        //
+        // And nothing over the spot itself: contentTime() clamps to the cut point
+        // while the break runs, so the last cue before the ad would otherwise sit
+        // frozen on top of somebody else's video for its whole length.
+        var t = player.currentTime();
+        if (adBreak.active && adBreak.isInside(t)) updateOverlay(-1);
+        else updateOverlay(adBreak.contentTime(t));
       }
     });
   }
