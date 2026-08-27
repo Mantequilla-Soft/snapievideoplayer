@@ -2178,6 +2178,30 @@ document.addEventListener('DOMContentLoaded', async function() {
     });
   }
 
+  // No seeking out of a spot from the keyboard.
+  //
+  // Hiding the control bar takes away the BUTTONS, but video.js hotkeys are still
+  // listening — so the arrow keys walked straight past an ad the advertiser had
+  // paid for, which made the hidden bar mostly decorative.
+  //
+  // Capture phase on document, the same trick TV mode uses below: video.js binds on
+  // the player element, so intercepting at the document on the way DOWN is what gets
+  // there first.
+  //
+  // Only the keys that move the playhead. Space and K still pause, M still mutes, F
+  // is still fullscreen and the volume keys still work — the viewer keeps every
+  // control that does not skip the ad, which is the whole point.
+  var SEEK_KEYS = ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+  document.addEventListener('keydown', function(event) {
+    if (!adBreak.active || !player) return;
+    var t = player.currentTime();
+    if (!adBreak.isInside(t)) return;              // 🚨 roll only — banners keep every key
+    if (SEEK_KEYS.indexOf(event.key) === -1) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true); // capture phase
+
   // TV Mode: Enter key toggles fullscreen (direct user gesture in iframe)
   // Use capture phase to intercept before video.js hotkeys handle it
   debugLog('TV Mode check:', isTVMode, 'tvmode param:', tvmode);
