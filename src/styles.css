@@ -1053,8 +1053,15 @@ body.tv-fullscreen-mode .vjs-tech {
 }
 
 /* ── While a video roll is on screen ──────────────────────────────────────
-   The scrubber goes away for the length of the spot. An advertiser paying for
-   five seconds should not be handed a drag handle straight past them.
+   The whole control bar goes down for the length of the spot — rewind, skip and
+   the time readout are all ways past an ad somebody paid for, and a settings
+   menu over a spot is chrome for a video that is not playing.
+
+   Clicking the video still pauses and resumes it: that is video.js's own
+   userActions.click on the player surface, nothing to do with the control bar.
+
+   The disclosure, the countdown and the banner click target are appended to the
+   PLAYER element rather than the bar, so they all survive this.
 
    🚨 ROLL ONLY — set from adBreak.isInside(), which reads the roll window. A
    banner has its own window and is deliberately not wired here: it is painted
@@ -1063,6 +1070,14 @@ body.tv-fullscreen-mode .vjs-tech {
 
    Hidden with visibility rather than display so the control bar keeps its
    height and the buttons either side do not jump as the spot starts and ends. */
+.video-js.vjs-roll-playing .vjs-control-bar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Belt and braces: even if something forces the bar visible, the scrubber stays
+   gone. Skipping past a spot somebody paid for should take more than one stray
+   class. */
 .video-js.vjs-roll-playing .vjs-progress-control {
   visibility: hidden;
   pointer-events: none;
