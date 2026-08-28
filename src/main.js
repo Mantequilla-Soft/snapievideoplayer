@@ -1596,7 +1596,20 @@ async function loadVideoFromData(videoData) {
   adBreak.reset();
   let primaryUrl = videoData.videoUrl;
   try {
-    const stitched = await adBreak.request({
+    // 🚨 NEVER ON A SHORT. The only slot that fits inside a short is a pre-roll, and
+    // a 15-second spot in front of a 12-second short delivers an impression to
+    // someone who never wanted the content — which is why shorts have their own
+    // format (shorts_roll) played BETWEEN them rather than inside one.
+    //
+    // The shorts FEED honoured this by never asking. This player asks for anything
+    // it is handed, so a short opened as an embed got a roll spliced into it. The
+    // server refuses too, but not asking is the better fix: it is one condition on
+    // data the player already has, and it does not depend on the API being the one
+    // that remembers.
+    //
+    // The FLAG, not the length. Length was never the test — the shorts that surfaced
+    // this are 61-68s, past any threshold anyone would pick.
+    const stitched = videoData.short === true ? null : await adBreak.request({
       owner: videoData.owner,
       permlink: videoData.permlink,
       viewer: viewerAccount(),
