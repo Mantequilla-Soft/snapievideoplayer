@@ -913,3 +913,172 @@ body.tv-fullscreen-mode .vjs-tech {
 @media (max-width: 640px) {
   .vjs-replay-heatmap { height: 22px; }
 }
+
+/* Sponsored disclosure, shown only while the playhead is inside an ad break.
+   Deliberately part of the player's own chrome: a separate overlay element would be
+   trivial for a filter list to hide without breaking anything else. */
+/* Pre-roll warning. Opposite corner from the disclosure on purpose: this appears
+   just before the spot, and the disclosure replaces it a second later — stacking
+   them in the same corner makes one look like it replaced the other's text. */
+.vjs-ad-countdown {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  display: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.66);
+  color: #fff;
+  font: 600 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* Click target over the burned-in banner. Nothing to draw: the pixels are already
+   in the video, this is only somewhere to click. Sized from the server's placement
+   percentages, so it tracks the banner through resize and fullscreen. */
+.vjs-banner-click {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: none;
+  cursor: pointer;
+  /* Deliberately invisible. A visible frame around a burned banner would double it. */
+  background: transparent;
+}
+
+@media (max-width: 600px) {
+  .vjs-ad-countdown { top: 8px; right: 8px; font-size: 11px; padding: 3px 8px; }
+}
+
+.vjs-sponsor-note {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  /* `right` as well as `left`: with only `left` this box is shrink-to-fit, and a
+     max-width on it does not constrain a wider child — the overlay overflows and
+     the text ends up squeezed into ellipses. Bounding both sides gives it a real
+     width the overlay fills and never exceeds. */
+  right: 12px;
+  max-width: min(340px, 62%);
+  z-index: 3;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  font: 400 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  text-decoration: none;
+  pointer-events: none;
+}
+
+/* Only clickable when there is somewhere to go. */
+.vjs-sponsor-note.vjs-sponsor-link {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.vjs-sponsor-note.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.75); }
+
+.vjs-sponsor-from {
+  font-size: 11px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.vjs-sponsor-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.vjs-sponsor-logo {
+  flex: none;
+  width: 57px;
+  height: 57px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.12);
+  display: block;
+}
+
+.vjs-sponsor-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.vjs-sponsor-name {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vjs-sponsor-slogan {
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.82);
+  /* Two lines, hard: a long slogan must not grow the overlay over the video. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.vjs-sponsor-resume {
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.72);
+  font-variant-numeric: tabular-nums;
+}
+
+.vjs-sponsor-resume:empty { display: none; }
+
+@media (max-width: 600px) {
+  .vjs-sponsor-note { top: 8px; left: 8px; right: 8px; max-width: 82%; padding: 6px 10px 8px; }
+  .vjs-sponsor-logo { width: 48px; height: 48px; }
+  .vjs-sponsor-name { font-size: 13px; }
+  .vjs-sponsor-slogan { font-size: 11px; }
+}
+
+/* ── While a video roll is on screen ──────────────────────────────────────
+   The whole control bar goes down for the length of the spot — rewind, skip and
+   the time readout are all ways past an ad somebody paid for, and a settings
+   menu over a spot is chrome for a video that is not playing.
+
+   Clicking the video still pauses and resumes it: that is video.js's own
+   userActions.click on the player surface, nothing to do with the control bar.
+
+   The disclosure, the countdown and the banner click target are appended to the
+   PLAYER element rather than the bar, so they all survive this.
+
+   🚨 ROLL ONLY — set from adBreak.isInside(), which reads the roll window. A
+   banner has its own window and is deliberately not wired here: it is painted
+   into the creator's video while that plays normally, so taking the timeline
+   away would be removing a control from ordinary playback.
+
+   Hidden with visibility rather than display so the control bar keeps its
+   height and the buttons either side do not jump as the spot starts and ends. */
+.video-js.vjs-roll-playing .vjs-control-bar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Belt and braces: even if something forces the bar visible, the scrubber stays
+   gone. Skipping past a spot somebody paid for should take more than one stray
+   class. */
+.video-js.vjs-roll-playing .vjs-progress-control {
+  visibility: hidden;
+  pointer-events: none;
+}

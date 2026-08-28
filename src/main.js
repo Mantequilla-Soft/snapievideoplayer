@@ -7,6 +7,7 @@ import subtitleManager from './subtitleManager';
 import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
 import { createScrubPreview } from './scrubPreview';
 import { createHeatmap } from './heatmapBar';
+import { createAdBreak } from './adBreak';
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {
@@ -28,6 +29,9 @@ let player;
 let scrubPreview = null; // YouTube-style low-res seek-bar preview (created with the player)
 let scrubPreviewEnabled = true; // on by default; disable with ?preview=0/false/no
 let heatmapBar = null; // "most replayed" seek-bar heatmap (created with the player)
+// Server-side ad insertion. Holds the mapping from the player's (stitched) timeline
+// back to content time — see src/adBreak.js for why that matters.
+const adBreak = createAdBreak();
 let heatmapEnabled = true; // on by default; disable with ?heatmap=0/false/no
 let currentVideoData = null;
 let isDebugMode = false;
@@ -347,6 +351,13 @@ function initializePlayer() {
       startWatchSession(currentVideoData);
     }
 
+    // Learn where the cut actually landed. Until this resolves, contentTime() is the
+    // identity — under-reporting the offset for a second beats subtracting a guess.
+    if (adBreak.active && !adBreak.resolved) {
+      adBreak.resolve().then((w) => { if (w) debugLog('Sponsor break at', w); });
+    }
+
+
     // Self-heal duration on first play — see maybeHealDuration for why this
     // isn't just `player.duration()` read synchronously here.
     if (currentVideoData && currentVideoData.type === 'embed' && !player.hasHealedDuration) {
@@ -523,6 +534,31 @@ function initializePlayer() {
     if (W && W.sid && Date.now() - W.lastBeatAt >= W.beatMs) {
       watchBeat();
     }
+
+    // Disclosure. Required by EU and US advertising rules, and rendered in the
+    // player's own chrome rather than as a separate element a filter list could
+    // strip without breaking playback.
+    if (adBreak.active) {
+      const inside = adBreak.isInside(currentTime);
+      updateSponsorLabel(inside);
+      // Hide the scrubber while the SPOT is on screen. An advertiser paying for a
+      // five-second spot should not be handed a drag handle straight past it, and a
+      // timeline that still moves invites exactly that.
+      //
+      // 🚨 ROLL ONLY. isInside() reads the roll window; a banner has its own
+      // (isBannerVisible) and deliberately does not come through here. A banner is
+      // painted into the creator's video while it plays normally — taking the
+      // timeline away then would be removing a control from ordinary playback.
+      setRollChrome(inside);
+      // A mid-roll that arrives with no warning is the part viewers resent most. A
+      // few seconds' notice costs the advertiser nothing and turns an interruption
+      // into a beat. Never while the spot is already playing.
+      const left = inside ? null : adBreak.secondsUntil(currentTime);
+      updateAdCountdown(left != null && left <= AD_COUNTDOWN_FROM ? Math.max(1, Math.ceil(left)) : null);
+    }
+    // The banner is independent of the spot: it can run on a playback with no spot
+    // at all, so it is driven on its own terms.
+    updateBannerClick(adBreak.isBannerVisible(currentTime));
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
@@ -1251,6 +1287,212 @@ async function incrementViewCount(videoData) {
 // with watchedSeconds + watchedPct + ip + video. Runs regardless of the view
 // counter — /play tracks duration without counting a view.
 // ---------------------------------------------------------------------------
+/**
+ * Show or hide the Sponsored label over the break.
+ *
+ * Created lazily inside the player element so it inherits fullscreen and sits above
+ * the video. Text comes from the server (`ad.label`) rather than being hardcoded, so
+ * the wording can change without shipping a player build.
+ */
+let sponsorLabelEl = null;
+let sponsorResumeEl = null;
+let sponsorBuiltFor = null;
+
+/**
+ * Player chrome while a video roll is on screen. A class on the player root, so the
+ * decision lives in CSS and nothing has to remember which controls were hidden in
+ * order to put them back.
+ */
+function setRollChrome(inside) {
+  const host = player && player.el && player.el();
+  if (!host) return;
+  host.classList.toggle('vjs-roll-playing', !!inside);
+}
+
+function updateSponsorLabel(show) {
+  if (!show) {
+    if (sponsorLabelEl) sponsorLabelEl.style.display = 'none';
+    return;
+  }
+  const host = player && player.el && player.el();
+  if (!host) return;
+  const info = adBreak.info || {};
+  const brand = info.brand || {};
+
+  // Rebuilt only when the spot changes, not on every timeupdate: the countdown is
+  // the one part that ticks, and it is updated in place below.
+  if (!sponsorLabelEl || sponsorBuiltFor !== info.sid) {
+    if (sponsorLabelEl && sponsorLabelEl.parentNode) sponsorLabelEl.parentNode.removeChild(sponsorLabelEl);
+    sponsorBuiltFor = info.sid;
+
+    // An anchor when there is somewhere to go, a plain div otherwise, so the
+    // overlay never looks clickable while doing nothing. The href points at the
+    // stitcher, which counts the click and then redirects — the advertiser's real
+    // address is never in the page.
+    const clickUrl = brand.clickUrl || null;
+    sponsorLabelEl = document.createElement(clickUrl ? 'a' : 'div');
+    sponsorLabelEl.className = 'vjs-sponsor-note' + (clickUrl ? ' vjs-sponsor-link' : '');
+    if (clickUrl) {
+      sponsorLabelEl.href = clickUrl;
+      sponsorLabelEl.target = '_blank';
+      sponsorLabelEl.rel = 'noopener noreferrer';
+      sponsorLabelEl.setAttribute(
+        'aria-label',
+        'Open ' + (brand.productName || 'the advertiser') + "'s website in a new tab",
+      );
+      // videojs swallows clicks on its own surface, and a click here must never
+      // also toggle play/pause.
+      sponsorLabelEl.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    const from = document.createElement('span');
+    from.className = 'vjs-sponsor-from';
+    from.textContent = brand.account ? 'Advertisement from @' + brand.account : (info.label || 'Sponsored');
+    sponsorLabelEl.appendChild(from);
+
+    if (brand.productName || brand.slogan || brand.logoUrl) {
+      const body = document.createElement('div');
+      body.className = 'vjs-sponsor-body';
+
+      const logo = document.createElement(brand.logoUrl ? 'img' : 'span');
+      logo.className = 'vjs-sponsor-logo';
+      if (brand.logoUrl) { logo.src = brand.logoUrl; logo.alt = ''; logo.loading = 'lazy'; }
+      body.appendChild(logo);
+
+      const text = document.createElement('div');
+      text.className = 'vjs-sponsor-text';
+      if (brand.productName) {
+        const n = document.createElement('strong');
+        n.className = 'vjs-sponsor-name';
+        n.textContent = brand.productName;
+        text.appendChild(n);
+      }
+      if (brand.slogan) {
+        const sl = document.createElement('span');
+        sl.className = 'vjs-sponsor-slogan';
+        sl.textContent = brand.slogan;
+        text.appendChild(sl);
+      }
+      body.appendChild(text);
+      sponsorLabelEl.appendChild(body);
+    }
+
+    sponsorResumeEl = document.createElement('span');
+    sponsorResumeEl.className = 'vjs-sponsor-resume';
+    sponsorLabelEl.appendChild(sponsorResumeEl);
+
+    host.appendChild(sponsorLabelEl);
+  }
+
+  // The wait, ticking in whole seconds. Held at "in a moment" rather than 0: the
+  // last tick is over before the number could be read.
+  const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  const remain = adBreak.secondsRemaining(t);
+  if (sponsorResumeEl) {
+    sponsorResumeEl.textContent = remain == null
+      ? ''
+      : (Math.ceil(remain) > 0 ? 'Video continues in ' + Math.ceil(remain) + 's' : 'Video continues in a moment');
+  }
+
+  sponsorLabelEl.style.display = 'flex';
+}
+
+/** How many seconds of warning a viewer gets before the break. */
+const AD_COUNTDOWN_FROM = 3;
+
+/**
+ * The pre-roll warning: "Ad in 3" counting down to the break.
+ *
+ * Deliberately separate from the disclosure overlay: it appears BEFORE the spot,
+ * belongs to the content the viewer is still watching, and sits in the opposite
+ * corner so it never covers the disclosure that follows it.
+ */
+let adCountdownEl = null;
+function updateAdCountdown(secs) {
+  if (secs == null) {
+    if (adCountdownEl) adCountdownEl.style.display = 'none';
+    return;
+  }
+  if (!adCountdownEl) {
+    const host = player && player.el && player.el();
+    if (!host) return;
+    adCountdownEl = document.createElement('div');
+    adCountdownEl.className = 'vjs-ad-countdown';
+    host.appendChild(adCountdownEl);
+  }
+  adCountdownEl.textContent = 'Ad in ' + secs;
+  adCountdownEl.style.display = 'block';
+}
+
+/**
+ * A click target over the burned-in banner.
+ *
+ * The banner itself is composited into the video by the stitcher, so there is
+ * nothing here to draw — only somewhere to click. Positioned from the placement
+ * percentages the server reports rather than guessed, so the target sits exactly
+ * where the pixels are, and only while the banner is actually on screen.
+ */
+let bannerClickEl = null;
+let bannerBuiltFor = null;
+function updateBannerClick(show) {
+  const info = adBreak.bannerInfo;
+  const clickUrl = info && info.brand && info.brand.clickUrl;
+  if (!show || !clickUrl) {
+    if (bannerClickEl) bannerClickEl.style.display = 'none';
+    return;
+  }
+  if (!bannerClickEl || bannerBuiltFor !== clickUrl) {
+    if (bannerClickEl && bannerClickEl.parentNode) bannerClickEl.parentNode.removeChild(bannerClickEl);
+    const host = player && player.el && player.el();
+    if (!host) return;
+    bannerBuiltFor = clickUrl;
+    bannerClickEl = document.createElement('a');
+    bannerClickEl.className = 'vjs-banner-click';
+    bannerClickEl.href = clickUrl;
+    bannerClickEl.target = '_blank';
+    bannerClickEl.rel = 'noopener noreferrer';
+    bannerClickEl.setAttribute(
+      'aria-label',
+      'Open ' + ((info.brand && info.brand.productName) || info.advertiser || 'the advertiser') + "'s website in a new tab",
+    );
+    // Must not also reach the video surface, or the click toggles play/pause.
+    bannerClickEl.addEventListener('click', (e) => e.stopPropagation());
+
+    const pl = info.placement || {};
+    // Percentages of the FRAME, which is what the stitcher burned against, so the
+    // target tracks the banner through resizes and fullscreen without recalculating.
+    const widthPct = Number(pl.widthPct) || 60;
+    const bottomPct = Number(pl.bottomPct) || 6;
+    const aspect = Number(pl.aspect) || 5.6;
+    const maxHeightPct = Number(pl.maxHeightPct) || 15;
+    bannerClickEl.style.width = widthPct + '%';
+    bannerClickEl.style.bottom = bottomPct + '%';
+    bannerClickEl.style.aspectRatio = String(aspect);
+    bannerClickEl.style.maxHeight = maxHeightPct + '%';
+    host.appendChild(bannerClickEl);
+  }
+  bannerClickEl.style.display = 'block';
+}
+
+/**
+ * Who is watching, if the embedding page told us.
+ *
+ * The player has no session of its own, so this only works when the page passes
+ * `?viewer=<hive account>` — the same shape as the existing `private` flag. Without
+ * it a Pro subscriber cannot be recognised and WILL be shown ads, so any surface
+ * that knows its viewer has to pass this.
+ */
+function viewerAccount() {
+  const v = (new URLSearchParams(window.location.search).get('viewer') || '').trim().toLowerCase();
+  return /^[a-z][a-z0-9.-]{2,15}$/.test(v) ? v : null;
+}
+
+/** Where the viewer is in the CONTENT, with any stitched ad time removed. */
+function playerContentTime() {
+  const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  return adBreak.active ? adBreak.contentTime(t) : t;
+}
+
 async function startWatchSession(videoData) {
   if (!videoData || !videoData.owner || !videoData.permlink) return;
   player.watch = { sid: null, token: null, beatMs: 5000, lastBeatAt: 0, starting: true };
@@ -1274,8 +1516,10 @@ async function startWatchSession(videoData) {
         permlink: videoData.permlink,
         type: videoData.type,
         duration: realDuration,
-        position: (player && isFinite(player.currentTime())) ? player.currentTime() : 0,
+        position: playerContentTime(),
         source: 'player',
+        // Marks the row as ad-free so the inventory forecast stops selling it.
+        premium: adBreak.isPremiumViewer,
         private: ['1', 'true', 'yes'].includes((new URLSearchParams(window.location.search).get('private') || '').toLowerCase())
       })
     });
@@ -1304,7 +1548,10 @@ function watchBeat(useBeacon) {
   const W = player && player.watch;
   if (!W || !W.sid) return;
   W.lastBeatAt = Date.now(); // throttle before the async call so we don't double-fire
-  const position = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  // CONTENT time, not player time. With a spot stitched in, currentTime() runs ahead
+  // of the video by the ad's length, and reporting that would credit ad seconds as
+  // watch time on the creator's video.
+  const position = playerContentTime();
   const rate = (player && player.playbackRate) ? player.playbackRate() : 1;
   const payload = JSON.stringify({ sid: W.sid, token: W.token, position, rate });
   try {
@@ -1345,13 +1592,53 @@ async function loadVideoFromData(videoData) {
     debugLog('No thumbnail available for this video');
   }
 
-  // Set video sources with CDN-first fallback chain
+  // Ask whether this playback carries a sponsor spot. A stitched manifest plays the
+  // ad inline; anything less than a clear yes falls straight through to the content
+  // URL, because no ad is always better than no video.
+  adBreak.reset();
+  let primaryUrl = videoData.videoUrl;
+  try {
+    // 🚨 NEVER ON A SHORT. The only slot that fits inside a short is a pre-roll, and
+    // a 15-second spot in front of a 12-second short delivers an impression to
+    // someone who never wanted the content — which is why shorts have their own
+    // format (shorts_roll) played BETWEEN them rather than inside one.
+    //
+    // The shorts FEED honoured this by never asking. This player asks for anything
+    // it is handed, so a short opened as an embed got a roll spliced into it. The
+    // server refuses too, but not asking is the better fix: it is one condition on
+    // data the player already has, and it does not depend on the API being the one
+    // that remembers.
+    //
+    // The FLAG, not the length. Length was never the test — the shorts that surfaced
+    // this are 61-68s, past any threshold anyone would pick.
+    const stitched = videoData.short === true ? null : await adBreak.request({
+      owner: videoData.owner,
+      permlink: videoData.permlink,
+      viewer: viewerAccount(),
+      manifestUrl: videoData.videoUrl,
+    });
+    if (stitched) {
+      primaryUrl = stitched;
+      debugLog('Playing with a sponsor break', adBreak.info);
+    }
+    // Exposed under ?debug=1 only. The Sponsored label is driven by timeupdate,
+    // which needs decodable media — so on any browser without H.264 it can never
+    // be exercised. Set here rather than on play for exactly that reason.
+    if (isDebugMode) window.__3sAdDebug = { adBreak, updateSponsorLabel };
+  } catch (_) { /* play the plain video */ }
+
+  // Set video sources with CDN-first fallback chain. The stitched manifest goes
+  // FIRST and the original stays right behind it, so a stitcher outage degrades to
+  // ordinary playback instead of a dead player.
   const sources = [
     {
-      src: videoData.videoUrl,
+      src: primaryUrl,
       type: 'application/x-mpegURL'
     }
   ];
+  if (primaryUrl !== videoData.videoUrl) {
+    sources.push({ src: videoData.videoUrl, type: 'application/x-mpegURL' });
+  }
   
   debugLog('Primary video URL:', videoData.videoUrl);
   
@@ -1385,6 +1672,8 @@ async function loadVideoFromData(videoData) {
 
   // Point the scrub-preview at the same manifest (pinned to lowest rendition).
   if (scrubPreview && videoData.videoUrl) {
+    // Always the original: the stitched playlist is per-session and no-store, and
+    // scrubbing should preview the video, not the sponsor spot.
     scrubPreview.setSource(videoData.videoUrl);
   }
 
@@ -1889,10 +2178,44 @@ document.addEventListener('DOMContentLoaded', async function() {
     initCaptionUI(player);
     player.on('timeupdate', function() {
       if (subtitleManager.cues.length > 0) {
-        updateOverlay(player.currentTime());
+        // CONTENT time, not player time. Cues are timed against the creator's video;
+        // a stitched spot pushes everything after it later in the PLAYER's timeline,
+        // so raw currentTime runs every cue early by the length of the spot for the
+        // whole rest of the video. contentTime() is a no-op when nothing is spliced.
+        //
+        // And nothing over the spot itself: contentTime() clamps to the cut point
+        // while the break runs, so the last cue before the ad would otherwise sit
+        // frozen on top of somebody else's video for its whole length.
+        var t = player.currentTime();
+        if (adBreak.active && adBreak.isInside(t)) updateOverlay(-1);
+        else updateOverlay(adBreak.contentTime(t));
       }
     });
   }
+
+  // No seeking out of a spot from the keyboard.
+  //
+  // Hiding the control bar takes away the BUTTONS, but video.js hotkeys are still
+  // listening — so the arrow keys walked straight past an ad the advertiser had
+  // paid for, which made the hidden bar mostly decorative.
+  //
+  // Capture phase on document, the same trick TV mode uses below: video.js binds on
+  // the player element, so intercepting at the document on the way DOWN is what gets
+  // there first.
+  //
+  // Only the keys that move the playhead. Space and K still pause, M still mutes, F
+  // is still fullscreen and the volume keys still work — the viewer keeps every
+  // control that does not skip the ad, which is the whole point.
+  var SEEK_KEYS = ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+  document.addEventListener('keydown', function(event) {
+    if (!adBreak.active || !player) return;
+    var t = player.currentTime();
+    if (!adBreak.isInside(t)) return;              // 🚨 roll only — banners keep every key
+    if (SEEK_KEYS.indexOf(event.key) === -1) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true); // capture phase
 
   // TV Mode: Enter key toggles fullscreen (direct user gesture in iframe)
   // Use capture phase to intercept before video.js hotkeys handle it
