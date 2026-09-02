@@ -46,6 +46,27 @@ const { isPlaceholderStatus } = require('./videoStatus');
 
 const LOG_COLLECTION = process.env.WATCH_LOG_COLLECTION || 'view-durations';
 const SESSION_COLLECTION = process.env.WATCH_SESSION_COLLECTION || 'view-sessions';
+
+/* ─── viewer ad rewards ───────────────────────────────────────────────────
+ * Recorded HERE, in the server-measured tracker, and nowhere else. The whole
+ * point of this file is that watch time is computed from heartbeats we time
+ * ourselves rather than from a number a client claims — and a metric that pays
+ * real money must not be the one exception to that.
+ *
+ * Everything below is a guard against being farmed. See the checker's
+ * ad_viewer_rewards notes for the measurements behind each threshold.
+ */
+const VIEWER_PREFS_COLLECTION = process.env.AD_VIEWER_PREFS_COLLECTION || 'ad_viewer_prefs';
+const VIEWER_WATCH_COLLECTION = process.env.AD_VIEWER_WATCH_COLLECTION || 'ad_viewer_watch';
+// A video only counts once the viewer has actually seen most of it.
+const VIEWER_MIN_PCT = parseFloat(process.env.AD_VIEWER_MIN_PCT) || 75;
+// 🚨 Seconds countable from ONE video, whatever its length. There are 34-hour
+// uploads on the platform: without this, looping one of them at 75% is worth more
+// than every genuine viewer combined. 20 minutes keeps ~90% of real watching
+// (67% of the qualifying pool is 5-15min videos) and makes the farm worthless.
+const VIEWER_MAX_SECONDS = parseInt(process.env.AD_VIEWER_MAX_SECONDS, 10) || 1200;
+
+const viewerName = (v) => String(v || '').trim().toLowerCase().slice(0, 16);
 const HEATMAP_COLLECTION = process.env.WATCH_HEATMAP_COLLECTION || 'view-heatmaps';
 const BEAT_SECONDS = Math.max(1, parseInt(process.env.WATCH_BEAT_SECONDS, 10) || 5);
 // Number of timeline slices in the heatmap (YouTube uses 100). Fixed per video
@@ -269,6 +290,11 @@ async function watchStart(req, res) {
     const startPosition = clampPos(req.body?.position, heatmapDuration);
     // Where the view happened: 'player' (embed iframe) | '3speak' (native site).
     const source = normalizeSource(req.body?.source);
+    // Who is watching, and ONLY when they have opted into rewards. The client
+    // sends it, but the opt-in is re-checked against the database below before a
+    // single identified row is written — a client asserting somebody's name must
+    // never be enough to start storing their viewing.
+    const viewer = viewerName(req.body?.viewer);
 
     await database.collection(SESSION_COLLECTION).insertOne({
       sid,
@@ -276,6 +302,7 @@ async function watchStart(req, res) {
       permlink: keyPermlink,
       type,
       source,
+      viewer: viewer || null,
       durationMs,
       heatmapDuration,     // seconds — stable axis for bucketing
       bucketCount,
@@ -425,6 +452,8 @@ async function watchBeat(req, res) {
       { upsert: true },
     );
 
+    await recordViewerReward(database, s, { watchedPct, contentSeconds });
+
     res.json({ watchedSeconds, contentSeconds, watchedPct, videoDuration, position: curPos });
   } catch (error) {
     console.error('Error recording watch beat:', error);
@@ -477,6 +506,66 @@ async function getHeatmap(req, res) {
   } catch (error) {
     console.error('Error fetching heatmap:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+
+/**
+ * Bank a qualifying watch toward the viewer's share of ad revenue.
+ *
+ * Every condition here is load-bearing, so they are spelled out rather than
+ * collapsed into one boolean:
+ *
+ *   opted in      re-read from the database, never trusted from the request.
+ *   source        3speak.tv only. An embed on someone else's site cannot know who
+ *                 is watching, and 84% of watch hours come from embeds — counting
+ *                 them would fund a pool almost nobody could ever be paid from.
+ *   not the owner otherwise a creator watching their own upload earns both the
+ *                 creator share and the viewer share off one play.
+ *   not premium   a Pro subscriber sees no ads, so their view earns no revenue to
+ *                 share. Paying them from other people's ads would be a transfer,
+ *                 not a reward.
+ *   not private   private mode means "do not record this", which outranks a payout.
+ *   >= 75%        the bar. `watchedPct` is unique timeline coverage, so seeking to
+ *                 the end gives one bucket, not a qualifying view.
+ *
+ * 🚨 ONE ROW PER (viewer, owner, permlink), upserted with $max. Rewatching can
+ * only ever raise the best figure already recorded, never add to it. Measured:
+ * rewatching inflates plays 63%, and one account replayed a single video 85 times.
+ * Summing would have paid all 85.
+ *
+ * Failure is swallowed on purpose: this is a reward ledger hanging off the end of
+ * view tracking, and it must never break the thing it is attached to.
+ */
+async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
+  try {
+    const viewer = viewerName(s.viewer);
+    if (!viewer) return;
+    if (s.source !== '3speak') return;
+    if (s.premium || s.private) return;
+    if (viewer === String(s.owner || '').toLowerCase()) return;
+    if (!(watchedPct >= VIEWER_MIN_PCT)) return;
+
+    const opted = await database.collection(VIEWER_PREFS_COLLECTION)
+      .findOne({ _id: viewer }, { projection: { rewardsEnabled: 1 } });
+    if (!opted || opted.rewardsEnabled !== true) return;
+
+    // contentSeconds, not watchedSeconds: the former is speed-corrected, so half
+    // speed cannot double a payout and 2x is not penalised.
+    const seconds = Math.min(Math.max(0, Math.round(contentSeconds) || 0), VIEWER_MAX_SECONDS);
+    if (seconds <= 0) return;
+
+    await database.collection(VIEWER_WATCH_COLLECTION).updateOne(
+      { viewer, owner: s.owner, permlink: s.permlink },
+      {
+        $max: { watchedPct, contentSeconds: seconds },
+        $set: { at: new Date() },
+        $setOnInsert: { payoutId: null, firstAt: new Date() },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    console.error('[viewer-reward] not recorded:', err && err.message);
   }
 }
 
