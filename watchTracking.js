@@ -522,10 +522,15 @@ async function getHeatmap(req, res) {
  *                 them would fund a pool almost nobody could ever be paid from.
  *   not the owner otherwise a creator watching their own upload earns both the
  *                 creator share and the viewer share off one play.
- *   not premium   a Pro subscriber sees no ads, so their view earns no revenue to
- *                 share. Paying them from other people's ads would be a transfer,
- *                 not a reward.
  *   not private   private mode means "do not record this", which outranks a payout.
+ *
+ * ⚠️ PRO SUBSCRIBERS DO EARN, even though they are never shown an ad. The earlier
+ * reasoning — that their view generates no revenue, so paying them would be a
+ * transfer — was the wrong frame. The pool is carved out of the PLATFORM's own
+ * share, not out of other viewers' or creators' money, so who it rewards is the
+ * platform's choice to make; and excluding the people who pay for the platform
+ * would be a strange way to thank them. Measured 2026-09-02: premium accounts
+ * contributed 0 of 68 qualifying hours in 30 days, so this costs nothing today.
  *   >= 75%        the bar. `watchedPct` is unique timeline coverage, so seeking to
  *                 the end gives one bucket, not a qualifying view.
  *
@@ -542,7 +547,7 @@ async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
     const viewer = viewerName(s.viewer);
     if (!viewer) return;
     if (s.source !== '3speak') return;
-    if (s.premium || s.private) return;
+    if (s.private) return;
     if (viewer === String(s.owner || '').toLowerCase()) return;
     if (!(watchedPct >= VIEWER_MIN_PCT)) return;
 
