@@ -953,6 +953,15 @@ body.tv-fullscreen-mode .vjs-tech {
   .vjs-ad-countdown { top: 8px; right: 8px; font-size: 11px; padding: 3px 8px; }
 }
 
+/* The sponsor disclosure.
+ *
+ * TWO LAYOUTS, chosen by the PLAYER's width, not the device's. A full-size player has
+ * room for the advertiser's logo, name and slogan laid out properly, and that is the
+ * default. Below SPONSOR_COMPACT_PX it collapses to a single line, because on a small
+ * embed the detailed card covered a quarter of the frame and the viewer could not see
+ * the ad it was labelling. An embed can be small on a desktop, which is exactly why
+ * this is not a mobile media query.
+ */
 .vjs-sponsor-note {
   position: absolute;
   top: 10px;
@@ -960,69 +969,91 @@ body.tv-fullscreen-mode .vjs-tech {
   z-index: 7;
   pointer-events: none;
 
-  /* ONE ROW. This is a disclosure, and it sits on top of the thing an advertiser paid
-     to have looked at, so it takes a strip and not a corner. It used to be a stacked
-     card with a 57px logo and covered a quarter of a small player. */
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  max-width: calc(100% - 20px);
-  padding: 4px 9px 4px 5px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.62);
+  gap: 4px 8px;
+  max-width: min(260px, 48%);
+  padding: 7px 11px 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(6px);
   color: #fff;
   font-size: 11px;
-  line-height: 1.5;
-  white-space: nowrap;
-  overflow: hidden;
+  line-height: 1.35;
   text-decoration: none;
 }
 
 .vjs-sponsor-link { pointer-events: auto; cursor: pointer; }
-.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.78); }
+.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.75); }
 
 .vjs-sponsor-logo {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
   object-fit: cover;
   background: rgba(255, 255, 255, 0.14);
 }
 
-/* The disclosure itself. Never shrinks and never scrolls: it is the one part that has
-   to be readable whatever else is going on. */
+/* The disclosure itself: never shrinks, never scrolls, never abbreviated away. It is
+   the one part that legally has to be readable. */
 .vjs-sponsor-from {
-  flex: 0 0 auto;
+  flex: 1 0 100%;
+  order: -1;
   opacity: 0.85;
+  font-size: 10px;
   letter-spacing: 0.01em;
 }
 
 .vjs-sponsor-name {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 700;
-  max-width: 38%;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* The only part of variable length, so the only part allowed to move. */
 .vjs-sponsor-slogan {
-  flex: 1 1 auto;
+  flex: 1 0 100%;
   min-width: 0;
   overflow: hidden;
   opacity: 0.9;
+  white-space: nowrap;
 }
 .vjs-sponsor-slogan-text { display: inline-block; }
 
-/* Long ones scroll rather than being cut off. Two copies side by side, translated by
-   half the pair, so the loop has no visible gap at the wrap-around. */
-.vjs-sponsor-slogan-scroll {
-  display: flex;
-  gap: 28px;
+.vjs-sponsor-resume {
+  flex: 1 0 100%;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
 }
-.vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text {
+
+/* ── Compact: one line, for a player too small to give a card away to ───────── */
+.vjs-sponsor-note.vjs-sponsor-compact {
+  flex-wrap: nowrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+  padding: 4px 9px 4px 5px;
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.vjs-sponsor-compact .vjs-sponsor-logo { width: 18px; height: 18px; border-radius: 50%; }
+.vjs-sponsor-compact .vjs-sponsor-from { flex: 0 0 auto; order: 0; }
+.vjs-sponsor-compact .vjs-sponsor-name { flex: 0 0 auto; max-width: 38%; }
+.vjs-sponsor-compact .vjs-sponsor-slogan { flex: 1 1 auto; }
+.vjs-sponsor-compact .vjs-sponsor-resume { flex: 0 0 auto; }
+/* The number alone. "Video continues in" is three words explaining a countdown that
+   explains itself, and on one line they are three words of somebody's ad. */
+.vjs-sponsor-compact .vjs-sponsor-resume-lead { display: none; }
+
+/* A long slogan scrolls rather than being cut off, and only where it has to: on the
+   card it simply wraps. Two copies, translated by the pair, so the loop has no gap. */
+.vjs-sponsor-compact .vjs-sponsor-slogan-scroll { display: flex; gap: 28px; }
+.vjs-sponsor-compact .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text {
   flex: 0 0 auto;
   animation: vjs-sponsor-marquee 12s linear infinite;
 }
@@ -1031,32 +1062,12 @@ body.tv-fullscreen-mode .vjs-tech {
   to { transform: translateX(calc(-100% - 28px)); }
 }
 
-/* Reduced motion means reduced motion. Clip it instead of scrolling it: a slogan that
-   is cut short is a smaller failure than one that moves for somebody who asked that
-   nothing move. */
+/* Reduced motion means reduced motion: clip it instead. A slogan cut short is a
+   smaller failure than one that moves for somebody who asked that nothing move. */
 @media (prefers-reduced-motion: reduce) {
-  .vjs-sponsor-slogan-scroll { display: block; text-overflow: ellipsis; }
-  .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text { animation: none; }
-  .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text[aria-hidden] { display: none; }
-}
-
-/* The wait, as a bare number. "Video continues in 4s" was three words explaining a
-   countdown that explains itself. */
-.vjs-sponsor-resume {
-  flex: 0 0 auto;
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
-}
-
-@media (max-width: 600px) {
-  .vjs-sponsor-note {
-    top: 6px;
-    left: 6px;
-    font-size: 10px;
-    padding: 3px 7px 3px 4px;
-    gap: 5px;
-  }
-  .vjs-sponsor-logo { width: 15px; height: 15px; }
+  .vjs-sponsor-compact .vjs-sponsor-slogan-scroll { display: block; text-overflow: ellipsis; }
+  .vjs-sponsor-compact .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text { animation: none; }
+  .vjs-sponsor-compact .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text[aria-hidden] { display: none; }
 }
 
 .video-js.vjs-roll-playing .vjs-control-bar {

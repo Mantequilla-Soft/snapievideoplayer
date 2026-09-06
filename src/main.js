@@ -1340,6 +1340,25 @@ function setRollChrome(inside) {
   host.classList.toggle('vjs-roll-playing', !!inside);
 }
 
+/* Below this width the disclosure collapses to a single line.
+ *
+ * A judgement about the PLAYER, not the device. The detailed card is fine on a
+ * full-size player and covers a quarter of a small embed, and an embed can be small on
+ * any device — which is why this is measured from the player element rather than from
+ * the viewport or the user agent.
+ */
+const SPONSOR_COMPACT_PX = 480;
+
+function sponsorIsCompact() {
+  try {
+    const el = player && player.el && player.el();
+    const w = el ? el.getBoundingClientRect().width : 0;
+    return w > 0 && w < SPONSOR_COMPACT_PX;
+  } catch (_) {
+    return false;
+  }
+}
+
 function updateSponsorLabel(show) {
   if (!show) {
     if (sponsorLabelEl) sponsorLabelEl.style.display = 'none';
@@ -1441,14 +1460,30 @@ function updateSponsorLabel(show) {
     host.appendChild(sponsorLabelEl);
   }
 
+  // Re-evaluated every tick, not at build time: a player can be resized or taken
+  // fullscreen mid-spot, and the layout should follow it.
+  if (sponsorLabelEl) sponsorLabelEl.classList.toggle('vjs-sponsor-compact', sponsorIsCompact());
+
   // The wait, ticking in whole seconds. Held at "in a moment" rather than 0: the
   // last tick is over before the number could be read.
   const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
   const remain = adBreak.secondsRemaining(t);
   if (sponsorResumeEl) {
-    sponsorResumeEl.textContent = remain == null
-      ? ''
-      : (Math.ceil(remain) > 0 ? 'Video continues in ' + Math.ceil(remain) + 's' : 'Video continues in a moment');
+    /* Both wordings, and the LAYOUT picks one. A full-size player has room to say what
+     * the number means; a small embed has room for the number. Two spans rather than
+     * two strings, so the choice belongs to the CSS that owns the layout and cannot
+     * drift from it. */
+    const left = remain == null ? null : Math.ceil(remain);
+    sponsorResumeEl.innerHTML = '';
+    if (left != null) {
+      const lead = document.createElement('span');
+      lead.className = 'vjs-sponsor-resume-lead';
+      lead.textContent = 'Video continues in ';
+      const num = document.createElement('span');
+      num.textContent = left > 0 ? left + 's' : 'a moment';
+      sponsorResumeEl.appendChild(lead);
+      sponsorResumeEl.appendChild(num);
+    }
   }
 
   sponsorLabelEl.style.display = 'flex';
