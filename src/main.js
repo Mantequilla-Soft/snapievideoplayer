@@ -1940,12 +1940,12 @@ function isHandheld() {
 }
 
 function ensureShadow() {
-  /* Nothing to preload when the banner is drawn rather than burned.
+  /* Nothing to preload when the banner is DRAWN rather than burned.
    *
-   * The shadow's only job was to have clean video ready for the moment a burned
-   * banner was closed. An overlay leaves the video untouched, so holding a second
-   * stream would be pure cost: double bandwidth and double decode for a swap that no
-   * longer has to happen. */
+   * The shadow's only job is to have clean video ready for the moment a burned banner
+   * is closed. An overlay leaves the video untouched, so on a handheld this would be
+   * double bandwidth and double decode for a swap that never happens — which is
+   * exactly the load a phone should not be carrying. */
   if (adBreak.bannerOverlay) return;
   // One stream is enough on a phone. See isHandheld: this is a question about the
   // DEVICE, and a narrow embed on a desktop is not one.
@@ -2336,21 +2336,21 @@ async function loadVideoFromData(videoData) {
       permlink: videoData.permlink,
       viewer: viewerAccount(),
       manifestUrl: videoData.videoUrl,
-      /* ALWAYS drawn in the page, never burned into the video.
+      /* Burned on desktop, drawn in the page on a handheld.
        *
-       * Burning is unblockable, and that was its whole argument. The cost turned out
-       * to be everything else: a burned banner cannot be removed without replacing
-       * bytes already downloaded, so closing one means a refetch, and a refetch means
-       * a pause. Avoiding that pause took a second video stream held in parallel, a
-       * cache-header change, a clean-playlist variant and a preload window — a lot of
-       * machinery, all of it in service of an ad the viewer had just asked to be rid
-       * of.
+       * Burning is unblockable, which is the whole reason it exists, and desktop can
+       * afford it: the clean copy is preloaded alongside so closing the banner is a
+       * swap between two decoded streams rather than a refetch.
        *
-       * Drawn in the page, closing it is hiding an element: instant, on every device,
-       * with nothing held in reserve. The trade is that a filter rule can hide it,
-       * which is a smaller loss than an ad that cannot be closed and a player that
-       * stutters when it is. */
-      bannerOverlay: true,
+       * A phone cannot. Removing burned pixels means replacing bytes already
+       * downloaded, the only way to do that without a pause is a second video stream,
+       * and mobile browsers will not reliably give us one. So there the creative is
+       * handed over and drawn, where closing it is hiding an element.
+       *
+       * The trade is only made where it has to be: an overlay can be hidden by a
+       * filter rule, and that is accepted on the device where the alternative is an ad
+       * nobody can close. */
+      bannerOverlay: isHandheld(),
     });
     if (stitched) {
       primaryUrl = stitched;
