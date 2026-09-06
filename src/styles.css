@@ -1092,7 +1092,12 @@ body.tv-fullscreen-mode .vjs-tech {
  *
  * Positioned by the same percentages the click target uses, so it tracks the banner
  * through resizes and fullscreen instead of drifting off it. */
-.vjs-banner-close {
+.video-js .vjs-banner-close {
+  /* 🚨 `.video-js` in front is load-bearing. video.js ships
+     `.video-js button { background: none; border: none }`, which is (0,1,1) and beats a
+     bare class, so a plain `.vjs-banner-close` rule lost its background and its rim and
+     the button rendered as naked glyph on the video. Both controls here are <button>
+     inside the player, so both need the container in the selector. */
   position: absolute;
   /* Above the click target (3) so it is never swallowed by it. */
   z-index: 4;
@@ -1121,17 +1126,17 @@ body.tv-fullscreen-mode .vjs-tech {
   opacity: 0.85;
   transition: opacity 120ms ease, background 120ms ease;
 }
-.vjs-banner-close:hover,
-.vjs-banner-close:focus-visible {
+.video-js .vjs-banner-close:hover,
+.video-js .vjs-banner-close:focus-visible {
   opacity: 1;
   background: rgba(0, 0, 0, 0.85);
   border-color: rgba(255, 255, 255, 0.85);
 }
-.vjs-banner-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.video-js .vjs-banner-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 /* Skip, bottom-right and clear of the control bar. Where every player puts it, and
  * therefore where people already look. */
-.vjs-ad-skip {
+.video-js .vjs-ad-skip {
   position: absolute;
   right: 12px;
   bottom: 56px;
@@ -1154,28 +1159,28 @@ body.tv-fullscreen-mode .vjs-tech {
 }
 
 /* Waiting: present, readable, plainly not pressable yet. */
-.vjs-ad-skip-waiting { pointer-events: none; opacity: 0.9; cursor: default; }
+.video-js .vjs-ad-skip-waiting { pointer-events: none; opacity: 0.9; cursor: default; }
 
 /* Ready. The border is the whole signal that it became pressable, which is why the
  * waiting state reserves the space for one. */
-.vjs-ad-skip-ready {
+.video-js .vjs-ad-skip-ready {
   pointer-events: auto;
   cursor: pointer;
   border-color: rgba(255, 255, 255, 0.45);
   transition: background 120ms ease, border-color 120ms ease;
 }
-.vjs-ad-skip-ready:hover,
-.vjs-ad-skip-ready:focus-visible {
+.video-js .vjs-ad-skip-ready:hover,
+.video-js .vjs-ad-skip-ready:focus-visible {
   background: rgba(0, 0, 0, 0.85);
   border-color: rgba(255, 255, 255, 0.75);
 }
-.vjs-ad-skip-ready:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.video-js .vjs-ad-skip-ready:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .vjs-banner-close, .vjs-ad-skip-ready { transition: none; }
+  .video-js .vjs-banner-close, .video-js .vjs-ad-skip-ready { transition: none; }
 }
 
 @media (max-width: 600px) {
-  .vjs-ad-skip { right: 8px; bottom: 44px; padding: 5px 9px; font-size: 12px; }
-  .vjs-banner-close { width: 38px; height: 38px; font-size: 24px; opacity: 0.97; }
+  .video-js .vjs-ad-skip { right: 8px; bottom: 44px; padding: 5px 9px; font-size: 12px; }
+  .video-js .vjs-banner-close { width: 38px; height: 38px; font-size: 24px; opacity: 0.97; }
 }

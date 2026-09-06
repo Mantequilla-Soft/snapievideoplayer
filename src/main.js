@@ -1606,7 +1606,50 @@ function updateBannerClick(show) {
  * and a spot booked at the start of the video is inside its own window there. Its
  * chrome would otherwise come back over a video that is merely reloading.
  */
+/* Temporary instrumentation for the close-button stall.
+ *
+ * Four rounds of reasoning about VHS internals have not settled why playback pauses,
+ * and the console has shown nothing because nothing is throwing. So this records what
+ * the media element actually DOES for ten seconds either side of a dismissal: which
+ * events fire, in what order, and where the playhead and the buffer are when they do.
+ *
+ * Prints one table on demand. Remove once the cause is known. */
+function traceDismiss(label) {
+  const t0 = Date.now();
+  const rows = [];
+  const note = (what) => {
+    let buffEnd = null;
+    try {
+      const b = player.buffered();
+      buffEnd = b && b.length ? b.end(b.length - 1) : null;
+    } catch (_) { /* not ready */ }
+    rows.push({
+      atMs: Date.now() - t0,
+      event: what,
+      currentTime: Number(player.currentTime().toFixed(2)),
+      paused: player.paused(),
+      readyState: (player.readyState && player.readyState()) || null,
+      bufferedTo: buffEnd == null ? null : Number(buffEnd.toFixed(2)),
+    });
+  };
+  const events = ['waiting', 'stalled', 'seeking', 'seeked', 'playing', 'pause', 'canplay', 'canplaythrough', 'emptied', 'loadstart', 'progress'];
+  const offs = events.map((e) => {
+    const fn = () => note(e);
+    player.on(e, fn);
+    return () => player.off(e, fn);
+  });
+  note(label);
+  setTimeout(() => {
+    offs.forEach((off) => off());
+    /* eslint-disable no-console */
+    console.log('[ad-dismiss] what the player did:');
+    console.table(rows);
+    /* eslint-enable no-console */
+  }, 10000);
+}
+
 async function dismissBanner() {
+  try { traceDismiss('x clicked'); } catch (_) { /* tracing must never break the close */ }
   if (bannerClickEl) bannerClickEl.style.display = 'none';
   if (bannerCloseEl) bannerCloseEl.style.display = 'none';
   try {
