@@ -8,6 +8,9 @@ import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
 import { createScrubPreview } from './scrubPreview';
 import { createHeatmap } from './heatmapBar';
 import { createAdBreak } from './adBreak';
+// Only for the shadow element that preloads the banner-free copy — the main player is
+// video.js/VHS and is not touched by this.
+import Hls from 'hls.js';
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {
@@ -565,7 +568,11 @@ function initializePlayer() {
     }
     // The banner is independent of the spot: it can run on a playback with no spot
     // at all, so it is driven on its own terms.
-    updateBannerClick(adBreak.isBannerVisible(currentTime));
+    const bannerOn = adBreak.isBannerVisible(currentTime);
+    updateBannerClick(bannerOn);
+    // The clean copy is only worth holding while there is a banner to close. Built
+    // when one starts, torn down when it ends.
+    if (bannerOn) ensureShadow(); else teardownShadow();
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
@@ -1659,6 +1666,78 @@ function traceDismiss(label) {
   }, 10000);
 }
 
+/* The shadow player: the same video WITHOUT the banner, buffered and ready.
+ *
+ * 🚨 This is the only way closing a banner can be instant, and every other approach
+ * failed for the same reason. The banner is burned into the pixels, so removing it
+ * means replacing bytes the player already downloaded, and replacing them means
+ * downloading again — a refetch, a rebuffer, a pause. Source swaps, buffer removals
+ * and loader resets are all different ways of paying that cost.
+ *
+ * So the clean copy is fetched IN ADVANCE, while the banner is still running, into a
+ * second hidden element. When the viewer closes the ad there is nothing to fetch: the
+ * seconds they are about to watch are already decoded, and the swap is a change of
+ * which element is on screen.
+ *
+ * ⚠️ It costs a second stream for as long as it is alive, so it is alive only while a
+ * banner actually is: created when one starts and torn down when it ends. And it is
+ * DESKTOP ONLY — mobile browsers throttle or refuse a second simultaneous video, and
+ * doubling the decoder load on a phone to save a one-second pause is a bad trade in
+ * exactly the place people notice heat and battery.
+ */
+let shadowEl = null;
+let shadowFor = null;
+
+function shadowSourceUrl() {
+  try {
+    const cur = player.currentSource();
+    if (!cur || !cur.src || cur.src.indexOf('/m/') === -1) return null;
+    // Same session playlist, asking the server to leave the banner out of it.
+    return cur.src + (cur.src.indexOf('?') === -1 ? '?' : '&') + 'nobanner=1';
+  } catch (_) { return null; }
+}
+
+function ensureShadow() {
+  // One stream is enough on a phone. See the note above.
+  if (window.innerWidth <= 768) return;
+  const url = shadowSourceUrl();
+  if (!url || shadowFor === url) return;
+  teardownShadow();
+
+  const host = player && player.el && player.el();
+  if (!host || !Hls.isSupported()) return;
+
+  shadowEl = document.createElement('video');
+  shadowEl.className = 'vjs-shadow-clean';
+  shadowEl.muted = true;            // it is only here to buffer; the main element has the audio
+  shadowEl.playsInline = true;
+  shadowEl.preload = 'auto';
+  host.appendChild(shadowEl);
+  shadowFor = url;
+
+  try {
+    const hls = new Hls({ maxBufferLength: 30 });
+    shadowEl.__hls = hls;
+    hls.loadSource(url);
+    hls.attachMedia(shadowEl);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      try {
+        // Follow the main element, so the clean copy buffers the seconds that are
+        // about to be watched rather than the start of the video.
+        shadowEl.currentTime = player.currentTime();
+        shadowEl.play().catch(() => {});
+      } catch (_) { /* it will be caught up at swap time */ }
+    });
+  } catch (_) { teardownShadow(); }
+}
+
+function teardownShadow() {
+  try { if (shadowEl && shadowEl.__hls) shadowEl.__hls.destroy(); } catch (_) { /* gone */ }
+  if (shadowEl && shadowEl.parentNode) shadowEl.parentNode.removeChild(shadowEl);
+  shadowEl = null;
+  shadowFor = null;
+}
+
 async function dismissBanner() {
   try { traceDismiss('x clicked'); } catch (_) { /* tracing must never break the close */ }
   if (bannerClickEl) bannerClickEl.style.display = 'none';
@@ -1672,7 +1751,41 @@ async function dismissBanner() {
 
     if (at == null) return;
 
-    /* SEAMLESS PATH: drop the buffer ahead and let VHS refill it.
+    /* INSTANT PATH: the clean copy is already buffered, so just switch to it.
+     *
+     * Nothing is fetched here and nothing is thrown away, which is the entire point:
+     * every other route ends in a refetch, and a refetch is the pause. The shadow
+     * element has been decoding the same seconds without the banner for as long as the
+     * banner has been on screen, so the swap is a change of which element is visible
+     * and audible.
+     *
+     * Only taken when the shadow has actually buffered PAST the playhead. A shadow
+     * that is still catching up would stall exactly like a refetch, and then this
+     * would be the same bug wearing a different hat.
+     */
+    try {
+      if (shadowEl && shadowEl.readyState >= 3) {
+        const ahead = shadowEl.buffered.length
+          ? shadowEl.buffered.end(shadowEl.buffered.length - 1) - at
+          : 0;
+        if (ahead > 2) {
+          const wasPlayingNow = !player.paused();
+          shadowEl.currentTime = at;
+          shadowEl.muted = player.muted();
+          shadowEl.volume = player.volume();
+          shadowEl.classList.add('vjs-shadow-live');
+          // The main element keeps its place but stops competing for audio and CPU.
+          try { player.pause(); } catch (_) { /* already still */ }
+          try { player.el().classList.add('vjs-hidden-under-shadow'); } catch (_) { /* cosmetic */ }
+          if (wasPlayingNow) { const pp = shadowEl.play(); if (pp && pp.catch) pp.catch(() => {}); }
+          // It is the playing element now, so it must not be torn down with the banner.
+          shadowFor = null;
+          return;
+        }
+      }
+    } catch (_) { /* fall through to the refetch paths below */ }
+
+    /* FALLBACK: drop the buffer ahead and let VHS refill it.
      *
      * Reloading the source works but tears down the MediaSource, which costs about a
      * second of black. Nothing needs tearing down: the burned segments are served

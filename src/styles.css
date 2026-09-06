@@ -1184,3 +1184,31 @@ body.tv-fullscreen-mode .vjs-tech {
   .video-js .vjs-ad-skip { right: 8px; bottom: 44px; padding: 5px 9px; font-size: 12px; }
   .video-js .vjs-banner-close { width: 38px; height: 38px; font-size: 24px; opacity: 0.97; }
 }
+
+/* The shadow element that preloads the banner-free copy.
+ *
+ * Off screen but REAL: it has to decode to be useful, and a `display: none` element
+ * does not. Opacity and pointer-events keep it out of the way until the moment it
+ * becomes the one being watched. */
+.video-js .vjs-shadow-clean {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Promoted: this is now the element the viewer is watching. */
+.video-js .vjs-shadow-clean.vjs-shadow-live {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 2;
+}
+
+/* The original, once the shadow has taken over. Kept in the DOM so the controls,
+   the timeline and every handler bound to it stay alive. */
+.video-js.vjs-hidden-under-shadow > video { opacity: 0; }
