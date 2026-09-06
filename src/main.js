@@ -1654,7 +1654,12 @@ function updateBannerOverlay(show) {
     bannerOverlayEl = document.createElement('div');
     bannerOverlayEl.className = 'vjs-banner-overlay';
     bannerOverlayEl.style.width = (Number(pl.widthPct) || 60) + '%';
-    bannerOverlayEl.style.bottom = (Number(pl.bottomPct) || 6) + '%';
+    /* Never INSIDE the control bar. The booked position is a percentage of the frame,
+     * and on a small player 6% of the height is a dozen pixels, which puts the banner
+     * on top of the progress bar: scrubbing to the banner's own position opened the
+     * advertiser's link instead of seeking. Nothing is burned in overlay mode, so
+     * there are no baked pixels to stay aligned with and the floor costs nothing. */
+    bannerOverlayEl.style.bottom = 'max(' + (Number(pl.bottomPct) || 6) + '%, 3.2em)';
     bannerOverlayEl.style.maxHeight = (Number(pl.maxHeightPct) || 15) + '%';
     /* 🚨 AND AN ASPECT RATIO, or the box has no height at all.
      *

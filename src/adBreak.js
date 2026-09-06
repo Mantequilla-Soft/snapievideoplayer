@@ -113,6 +113,8 @@ export function createAdBreak() {
   let skipAfter = null;
   // Set once the spot has been passed for good; nothing shows its chrome after that.
   let spotRetired = false;
+  // Seconds into the banner before its close button may appear. The server decides.
+  let bannerCloseAfter = 5;
   // A banner-only playback still has a session to ask /i about, and it is the same
   // sid, but it is read from the banner's own manifest URL because that is the only
   // one present in that case.
@@ -129,6 +131,20 @@ export function createAdBreak() {
 
     /** The banner running on this playback, or null. */
     get bannerInfo() { return banner; },
+
+    /**
+     * May the banner be closed yet?
+     *
+     * Not from its first frame. An ad that can be dismissed instantly is an ad nobody
+     * reads, and the advertiser bought seconds on screen rather than a button. The
+     * threshold comes from the server so the burned banner and the drawn one cannot
+     * disagree about a number that is really one decision.
+     */
+    bannerClosable(playerTime) {
+      if (!bannerWindow || !isFinite(playerTime)) return false;
+      const t = this.contentTime(playerTime);
+      return (t - bannerWindow.start) >= bannerCloseAfter;
+    },
 
     /** The creative to DRAW, when the server agreed to hand it over. Null when burned. */
     get bannerOverlay() { return (banner && banner.overlay) || null; },
@@ -216,6 +232,12 @@ export function createAdBreak() {
             durationSeconds: data.banner.durationSeconds,
             advertiser: data.banner.advertiser || null,
             brand: data.banner.brand || null,
+            // The creative to DRAW, when the server handed it over instead of burning
+            // it. Dropping this field was why an overlay banner never appeared: the
+            // server sent the artwork, the client threw it away at the door, and the
+            // only things left to render were the close button and a click target
+            // over a banner that was never drawn.
+            overlay: data.banner.overlay || null,
             // Where the server burned it, in frame percentages. Never assumed here.
             placement: data.banner.placement || null,
             manifestUrl: data.banner.manifestUrl,

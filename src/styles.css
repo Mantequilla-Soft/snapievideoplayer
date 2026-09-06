@@ -935,6 +935,18 @@ body.tv-fullscreen-mode .vjs-tech {
   pointer-events: none;
 }
 
+/* 🚨 THE CONTROLS OUTRANK THE BANNER.
+ *
+ * video.js gives .vjs-control-bar no z-index at all, so any positioned sibling won
+ * the stack against it. The burned banner's click target sits low in the frame by
+ * design, overlapped the progress bar, and swallowed the touch: scrubbing to the
+ * banner's position opened the advertiser's link instead of seeking.
+ *
+ * Safe to put the bar on top, because video.js already sets `pointer-events: none`
+ * on it while the controls are faded out, so the banner stays clickable exactly when
+ * the controls are not in the way. The ad's OWN controls sit above it in turn. */
+.video-js .vjs-control-bar { z-index: 5; }
+
 /* Click target over the burned-in banner. Nothing to draw: the pixels are already
    in the video, this is only somewhere to click. Sized from the server's placement
    percentages, so it tracks the banner through resize and fullscreen. */
@@ -1099,8 +1111,9 @@ body.tv-fullscreen-mode .vjs-tech {
      the button rendered as naked glyph on the video. Both controls here are <button>
      inside the player, so both need the container in the selector. */
   position: absolute;
-  /* Above the click target (3) so it is never swallowed by it. */
-  z-index: 4;
+  /* Above the click target (3), and above .vjs-control-bar (5): closing an ad has to
+     work whether or not the controls happen to be up. */
+  z-index: 6;
   display: none;
   align-items: center;
   justify-content: center;
@@ -1142,7 +1155,9 @@ body.tv-fullscreen-mode .vjs-tech {
   position: absolute;
   right: 12px;
   bottom: 56px;
-  z-index: 4;
+  /* Above .vjs-control-bar (5). It sits in the corner the bar reaches, and skipping
+     an ad must not depend on the controls being faded out. */
+  z-index: 6;
   display: none;
   align-items: center;
   gap: 5px;
