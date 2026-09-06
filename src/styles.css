@@ -1234,7 +1234,10 @@ body.tv-fullscreen-mode .vjs-tech {
 
 .video-js .vjs-banner-overlay-media {
   width: 100%;
-  height: 100%;
+  /* `height: 100%` against a parent whose height comes from an aspect ratio is fine,
+     but auto is safer: if the ratio is ever missing the creative still shows at its
+     own size instead of collapsing to nothing. */
+  height: auto;
   max-height: 100%;
   object-fit: contain;
   display: block;

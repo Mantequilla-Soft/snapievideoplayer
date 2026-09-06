@@ -1656,6 +1656,17 @@ function updateBannerOverlay(show) {
     bannerOverlayEl.style.width = (Number(pl.widthPct) || 60) + '%';
     bannerOverlayEl.style.bottom = (Number(pl.bottomPct) || 6) + '%';
     bannerOverlayEl.style.maxHeight = (Number(pl.maxHeightPct) || 15) + '%';
+    /* 🚨 AND AN ASPECT RATIO, or the box has no height at all.
+     *
+     * Width and max-height give it no size of its own, so the container collapsed to
+     * zero and the creative inside it — sized at height:100% of an auto-height parent —
+     * rendered as nothing. The close button is absolutely positioned, so it was the one
+     * thing still visible: an x floating over no banner.
+     *
+     * The burned click target has always set this, for the same reason. Same number
+     * from the same placement, so the drawn banner occupies exactly the box the burned
+     * one would have. */
+    bannerOverlayEl.style.aspectRatio = String(Number(pl.aspect) || 5.6);
 
     // The creative. A video one loops and is silent, exactly as the burned version is:
     // a banner shares the frame with something the viewer chose, and does not get to
@@ -1708,6 +1719,12 @@ function updateBannerOverlay(show) {
     x.className = 'vjs-banner-overlay-close';
     x.setAttribute('aria-label', 'Close this ad');
     x.textContent = '\u00d7';
+    /* Every gesture, not just click. video.js toggles playback from a tap on its own
+     * surface, and on touch that handler runs on pointerdown — so stopping the click
+     * alone still let a tap pause the video on its way past. */
+    ['pointerdown', 'touchstart', 'mousedown'].forEach((ev) => {
+      x.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+    });
     x.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1722,6 +1739,10 @@ function updateBannerOverlay(show) {
     bannerShownReported = false;
   }
   bannerOverlayEl.style.display = 'block';
+  // Same wait as the burned one, from the same server-sent threshold.
+  const nowT = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  const xEl = bannerOverlayEl.querySelector('.vjs-banner-overlay-close');
+  if (xEl) xEl.style.display = adBreak.bannerClosable(nowT) ? 'flex' : 'none';
 
   /* Reported once, after it has actually been on screen for what was booked.
    *
@@ -1797,7 +1818,10 @@ function updateBannerClick(show) {
     host.appendChild(bannerCloseEl);
   }
   bannerClickEl.style.display = 'block';
-  if (bannerCloseEl) bannerCloseEl.style.display = 'flex';
+  // The close button waits: see adBreak.bannerClosable. The click target does not —
+  // following the ad is something a viewer may do from the first frame.
+  const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  if (bannerCloseEl) bannerCloseEl.style.display = adBreak.bannerClosable(t) ? 'flex' : 'none';
 }
 
 /**
