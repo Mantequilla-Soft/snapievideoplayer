@@ -1654,12 +1654,8 @@ function updateBannerOverlay(show) {
     bannerOverlayEl = document.createElement('div');
     bannerOverlayEl.className = 'vjs-banner-overlay';
     bannerOverlayEl.style.width = (Number(pl.widthPct) || 60) + '%';
-    /* Never INSIDE the control bar. The booked position is a percentage of the frame,
-     * and on a small player 6% of the height is a dozen pixels, which puts the banner
-     * on top of the progress bar: scrubbing to the banner's own position opened the
-     * advertiser's link instead of seeking. Nothing is burned in overlay mode, so
-     * there are no baked pixels to stay aligned with and the floor costs nothing. */
-    bannerOverlayEl.style.bottom = 'max(' + (Number(pl.bottomPct) || 6) + '%, 3.2em)';
+    // Exactly where it was booked. The advertiser bought a position in the frame.
+    bannerOverlayEl.style.bottom = (Number(pl.bottomPct) || 6) + '%';
     bannerOverlayEl.style.maxHeight = (Number(pl.maxHeightPct) || 15) + '%';
     /* 🚨 AND AN ASPECT RATIO, or the box has no height at all.
      *
@@ -1744,6 +1740,26 @@ function updateBannerOverlay(show) {
     bannerShownReported = false;
   }
   bannerOverlayEl.style.display = 'block';
+
+  /* 🚨 THE CLICK AREA STOPS WHERE THE CONTROLS START — the banner itself does not.
+   *
+   * A banner sits low in the frame by design, so on a small player it overlaps the
+   * progress bar. Moving the banner up would take the advertiser out of the position
+   * they bought, so only the anchor is trimmed: the artwork still draws over the
+   * controls, and the strip of it that covers them is simply not clickable. Without
+   * this, scrubbing to the banner's own position opened the advertiser's link.
+   *
+   * Measured rather than derived, because the booked offset is a percentage of the
+   * frame and the control bar is a fixed height, so where they meet depends on the
+   * player's current size. Re-run on every tick, which is what handles a resize. */
+  const hitEl = bannerOverlayEl.querySelector('.vjs-banner-overlay-hit');
+  if (hitEl) {
+    const bar = host.querySelector('.vjs-control-bar');
+    const barH = bar ? bar.getBoundingClientRect().height : 0;
+    const gap = host.getBoundingClientRect().bottom - bannerOverlayEl.getBoundingClientRect().bottom;
+    hitEl.style.bottom = Math.max(0, Math.round(barH - gap)) + 'px';
+  }
+
   // Same wait as the burned one, from the same server-sent threshold.
   const nowT = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
   const xEl = bannerOverlayEl.querySelector('.vjs-banner-overlay-close');

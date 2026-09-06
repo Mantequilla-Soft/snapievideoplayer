@@ -1198,7 +1198,9 @@ body.tv-fullscreen-mode .vjs-tech {
 }
 
 @media (max-width: 600px) {
-  .video-js .vjs-ad-skip { right: 8px; bottom: 44px; padding: 5px 9px; font-size: 12px; }
+  /* Just clear of the control bar rather than floating well above it: 44px left a
+     gap wide enough that the button read as unmoored from the player's own chrome. */
+  .video-js .vjs-ad-skip { right: 8px; bottom: 36px; padding: 5px 9px; font-size: 12px; }
   .video-js .vjs-banner-close { width: 28px; height: 28px; font-size: 18px; opacity: 0.97; }
 }
 
