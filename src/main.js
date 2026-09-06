@@ -584,7 +584,7 @@ function initializePlayer() {
      * play the video at all, and costs nothing extra: it is the same stream, started
      * sooner and still torn down the moment the banner ends. */
     if (adBreak.bannerDueWithin(currentTime, SHADOW_LEAD_S)) ensureShadow();
-    else if (!shadowClaimed) teardownShadow();
+    else if (!shadowClaimed) teardownShadow('banner window passed');
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
@@ -1376,36 +1376,62 @@ function updateSponsorLabel(show) {
       sponsorLabelEl.addEventListener('click', (e) => e.stopPropagation());
     }
 
+    /* ONE LINE, in this order: who it is from, what it is, and how long is left.
+     *
+     * It was a stacked card — a 57px logo, the advertiser's handle on its own line,
+     * the product name, the slogan under it, then the countdown — and on a small
+     * player it covered the top-left quarter of the ad it was labelling. The viewer
+     * could not see the thing being advertised, which serves nobody: not the
+     * advertiser who paid for the frame, and not the disclosure, which only has to be
+     * legible.
+     *
+     * So: a small logo, "Ad · @account", the product name, the slogan, the countdown.
+     * The slogan is the only part that can be any length, so it is the only part
+     * allowed to scroll.
+     */
+    const logo = document.createElement(brand.logoUrl ? 'img' : 'span');
+    logo.className = 'vjs-sponsor-logo';
+    if (brand.logoUrl) { logo.src = brand.logoUrl; logo.alt = ''; logo.loading = 'lazy'; }
+    sponsorLabelEl.appendChild(logo);
+
     const from = document.createElement('span');
     from.className = 'vjs-sponsor-from';
-    from.textContent = brand.account ? 'Advertisement from @' + brand.account : (info.label || 'Sponsored');
+    // Short, and still unambiguous: "Ad" is the disclosure, the handle says whose.
+    from.textContent = brand.account ? 'Ad \u00b7 @' + brand.account : (info.label || 'Ad');
     sponsorLabelEl.appendChild(from);
 
-    if (brand.productName || brand.slogan || brand.logoUrl) {
-      const body = document.createElement('div');
-      body.className = 'vjs-sponsor-body';
+    if (brand.productName) {
+      const n = document.createElement('strong');
+      n.className = 'vjs-sponsor-name';
+      n.textContent = brand.productName;
+      sponsorLabelEl.appendChild(n);
+    }
 
-      const logo = document.createElement(brand.logoUrl ? 'img' : 'span');
-      logo.className = 'vjs-sponsor-logo';
-      if (brand.logoUrl) { logo.src = brand.logoUrl; logo.alt = ''; logo.loading = 'lazy'; }
-      body.appendChild(logo);
-
-      const text = document.createElement('div');
-      text.className = 'vjs-sponsor-text';
-      if (brand.productName) {
-        const n = document.createElement('strong');
-        n.className = 'vjs-sponsor-name';
-        n.textContent = brand.productName;
-        text.appendChild(n);
+    if (brand.slogan) {
+      /* Scrolls only when it does not fit.
+       *
+       * An advertiser writes whatever length of slogan they like, and the overlay
+       * cannot grow to match without eating the frame again. Short ones sit still,
+       * which is what most are; long ones move so they can still be read in full. The
+       * threshold is characters rather than a measured width because the measurement
+       * is not available until it is in the document, and being a little wrong here
+       * costs a scroll that was not needed rather than text nobody can read. */
+      const wrap = document.createElement('span');
+      wrap.className = 'vjs-sponsor-slogan';
+      const sl = document.createElement('span');
+      sl.className = 'vjs-sponsor-slogan-text';
+      sl.textContent = brand.slogan;
+      if (String(brand.slogan).length > SLOGAN_SCROLL_CHARS) {
+        wrap.classList.add('vjs-sponsor-slogan-scroll');
+        // Duplicated so the loop has no gap at the wrap-around.
+        const copy = sl.cloneNode(true);
+        copy.setAttribute('aria-hidden', 'true');
+        wrap.appendChild(sl);
+        wrap.appendChild(copy);
+      } else {
+        wrap.appendChild(sl);
       }
-      if (brand.slogan) {
-        const sl = document.createElement('span');
-        sl.className = 'vjs-sponsor-slogan';
-        sl.textContent = brand.slogan;
-        text.appendChild(sl);
-      }
-      body.appendChild(text);
-      sponsorLabelEl.appendChild(body);
+      sponsorLabelEl.appendChild(wrap);
     }
 
     sponsorResumeEl = document.createElement('span');
@@ -1703,6 +1729,8 @@ let shadowFor = null;
 let shadowClaimed = false;
 // How far ahead of a banner to start buffering the clean copy.
 const SHADOW_LEAD_S = 15;
+// Above this, a slogan scrolls instead of being clipped. See updateSponsorLabel.
+const SLOGAN_SCROLL_CHARS = 26;
 
 function shadowSourceUrl() {
   try {
@@ -1723,7 +1751,7 @@ function ensureShadow() {
     return;
   }
   if (shadowFor === url) return;
-  teardownShadow();
+  teardownShadow('source url changed to ' + url);
 
   const host = player && player.el && player.el();
   if (!host || !Hls.isSupported()) {
@@ -1731,8 +1759,9 @@ function ensureShadow() {
     console.log('[ad-dismiss] no shadow: hls.js unsupported here');
     return;
   }
+  shadowBuilds += 1;
   /* eslint-disable-next-line no-console */
-  console.log('[ad-dismiss] preloading the banner-free copy:', url);
+  console.log('[ad-dismiss] preloading the banner-free copy (build #' + shadowBuilds + '):', url);
 
   shadowEl = document.createElement('video');
   shadowEl.className = 'vjs-shadow-clean';
@@ -1755,10 +1784,14 @@ function ensureShadow() {
         shadowEl.play().catch(() => {});
       } catch (_) { /* it will be caught up at swap time */ }
     });
-  } catch (_) { teardownShadow(); }
+  } catch (_) { teardownShadow('hls threw while starting'); }
 }
 
-function teardownShadow() {
+let shadowBuilds = 0;
+let shadowTeardowns = 0;
+let lastTeardownWhy = null;
+function teardownShadow(why) {
+  if (shadowEl) { shadowTeardowns += 1; lastTeardownWhy = why || 'unspecified'; }
   try { if (shadowEl && shadowEl.__hls) shadowEl.__hls.destroy(); } catch (_) { /* gone */ }
   if (shadowEl && shadowEl.parentNode) shadowEl.parentNode.removeChild(shadowEl);
   shadowEl = null;
@@ -1783,6 +1816,10 @@ function swapToShadow(at) {
     }
     /* eslint-disable-next-line no-console */
     console.log('[ad-dismiss] shadow:', {
+      builds: shadowBuilds,
+      teardowns: shadowTeardowns,
+      lastTeardownWhy,
+      claimed: shadowClaimed,
       exists: !!shadowEl,
       readyState: shadowEl ? shadowEl.readyState : null,
       bufferedAheadS: ahead == null ? null : Number(ahead.toFixed(2)),

@@ -955,126 +955,110 @@ body.tv-fullscreen-mode .vjs-tech {
 
 .vjs-sponsor-note {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  /* `right` as well as `left`: with only `left` this box is shrink-to-fit, and a
-     max-width on it does not constrain a wider child — the overlay overflows and
-     the text ends up squeezed into ellipses. Bounding both sides gives it a real
-     width the overlay fills and never exceeds. */
-  right: 12px;
-  /* Smaller than it was. This has to be READABLE, not prominent: it is a required
-     disclosure sitting on somebody's video, and at 340px with a 57px logo it was
-     covering a fifth of the frame and reading as a second piece of content. */
-  max-width: min(240px, 46%);
-  z-index: 3;
-  display: none;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px 9px 7px;
-  border-radius: 8px;
+  top: 10px;
+  left: 10px;
+  z-index: 7;
+  pointer-events: none;
+
+  /* ONE ROW. This is a disclosure, and it sits on top of the thing an advertiser paid
+     to have looked at, so it takes a strip and not a corner. It used to be a stacked
+     card with a 57px logo and covered a quarter of a small player. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+  padding: 4px 9px 4px 5px;
+  border-radius: 999px;
   background: rgba(0, 0, 0, 0.62);
   backdrop-filter: blur(6px);
   color: #fff;
-  font: 400 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
   text-decoration: none;
-  pointer-events: none;
 }
 
-/* Only clickable when there is somewhere to go. */
-.vjs-sponsor-note.vjs-sponsor-link {
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-.vjs-sponsor-note.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.75); }
-
-.vjs-sponsor-from {
-  font-size: 10px;
-  line-height: 1.25;
-  color: rgba(255, 255, 255, 0.72);
-}
-
-.vjs-sponsor-body {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
+.vjs-sponsor-link { pointer-events: auto; cursor: pointer; }
+.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.78); }
 
 .vjs-sponsor-logo {
-  flex: none;
-  width: 34px;
-  height: 34px;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   object-fit: cover;
-  background: rgba(255, 255, 255, 0.12);
-  display: block;
+  background: rgba(255, 255, 255, 0.14);
 }
 
-.vjs-sponsor-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+/* The disclosure itself. Never shrinks and never scrolls: it is the one part that has
+   to be readable whatever else is going on. */
+.vjs-sponsor-from {
+  flex: 0 0 auto;
+  opacity: 0.85;
+  letter-spacing: 0.01em;
 }
 
 .vjs-sponsor-name {
-  font-size: 14px;
+  flex: 0 0 auto;
   font-weight: 700;
-  line-height: 1.25;
+  max-width: 38%;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
+/* The only part of variable length, so the only part allowed to move. */
 .vjs-sponsor-slogan {
-  font-size: 11px;
-  line-height: 1.25;
-  color: rgba(255, 255, 255, 0.82);
-  /* Two lines, hard: a long slogan must not grow the overlay over the video. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
+  opacity: 0.9;
+}
+.vjs-sponsor-slogan-text { display: inline-block; }
+
+/* Long ones scroll rather than being cut off. Two copies side by side, translated by
+   half the pair, so the loop has no visible gap at the wrap-around. */
+.vjs-sponsor-slogan-scroll {
+  display: flex;
+  gap: 28px;
+}
+.vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text {
+  flex: 0 0 auto;
+  animation: vjs-sponsor-marquee 12s linear infinite;
+}
+@keyframes vjs-sponsor-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-100% - 28px)); }
 }
 
+/* Reduced motion means reduced motion. Clip it instead of scrolling it: a slogan that
+   is cut short is a smaller failure than one that moves for somebody who asked that
+   nothing move. */
+@media (prefers-reduced-motion: reduce) {
+  .vjs-sponsor-slogan-scroll { display: block; text-overflow: ellipsis; }
+  .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text { animation: none; }
+  .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text[aria-hidden] { display: none; }
+}
+
+/* The wait, as a bare number. "Video continues in 4s" was three words explaining a
+   countdown that explains itself. */
 .vjs-sponsor-resume {
-  font-size: 11.5px;
-  line-height: 1.3;
-  color: rgba(255, 255, 255, 0.72);
+  flex: 0 0 auto;
+  opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
 
-.vjs-sponsor-resume:empty { display: none; }
-
 @media (max-width: 600px) {
-  /* 82% of a phone screen is most of the video. Small enough to read, small enough
-     to still be watching something. */
-  .vjs-sponsor-note { top: 8px; left: 8px; right: 8px; max-width: 62%; padding: 5px 8px 6px; }
-  .vjs-sponsor-logo { width: 48px; height: 48px; }
-  .vjs-sponsor-name { font-size: 13px; }
-  .vjs-sponsor-slogan { font-size: 11px; }
+  .vjs-sponsor-note {
+    top: 6px;
+    left: 6px;
+    font-size: 10px;
+    padding: 3px 7px 3px 4px;
+    gap: 5px;
+  }
+  .vjs-sponsor-logo { width: 15px; height: 15px; }
 }
 
-/* ── While a video roll is on screen ──────────────────────────────────────
-   The whole control bar goes down for the length of the spot — rewind, skip and
-   the time readout are all ways past an ad somebody paid for, and a settings
-   menu over a spot is chrome for a video that is not playing.
-
-   Clicking the video still pauses and resumes it: that is video.js's own
-   userActions.click on the player surface, nothing to do with the control bar.
-
-   The disclosure, the countdown and the banner click target are appended to the
-   PLAYER element rather than the bar, so they all survive this.
-
-   🚨 ROLL ONLY — set from adBreak.isInside(), which reads the roll window. A
-   banner has its own window and is deliberately not wired here: it is painted
-   into the creator's video while that plays normally, so taking the timeline
-   away would be removing a control from ordinary playback.
-
-   Hidden with visibility rather than display so the control bar keeps its
-   height and the buttons either side do not jump as the spot starts and ends. */
 .video-js.vjs-roll-playing .vjs-control-bar {
   opacity: 0;
   pointer-events: none;
