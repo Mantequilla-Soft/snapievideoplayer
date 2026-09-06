@@ -1693,6 +1693,24 @@ function updateBannerOverlay(show) {
       media.alt = '';
     }
     media.className = 'vjs-banner-overlay-media';
+
+    /* Re-shape the box to the creative once its real proportions are known.
+     *
+     * The server sends no aspect for a banner (placement.aspect is null), so the 5.6
+     * above is only a placeholder that gives the box a height before anything has
+     * loaded. Left at the placeholder the box is taller than the artwork inside it,
+     * and the close button then sits in the corner of the BOX — floating above the
+     * banner rather than on it, which is exactly where it looked wrong. */
+    const box = bannerOverlayEl;
+    const fitBox = (w, h) => {
+      if (w > 0 && h > 0) box.style.aspectRatio = String(w / h);
+    };
+    if (ov.videoUrl) {
+      media.addEventListener('loadedmetadata', () => fitBox(media.videoWidth, media.videoHeight));
+    } else {
+      media.addEventListener('load', () => fitBox(media.naturalWidth, media.naturalHeight));
+    }
+
     bannerOverlayEl.appendChild(media);
 
     // Required disclosure, in the banner's own corner so it travels with the ad.
@@ -1723,16 +1741,27 @@ function updateBannerOverlay(show) {
     /* Every gesture, not just click. video.js toggles playback from a tap on its own
      * surface, and on touch that handler runs on pointerdown — so stopping the click
      * alone still let a tap pause the video on its way past. */
-    ['pointerdown', 'touchstart', 'mousedown'].forEach((ev) => {
-      x.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
-    });
-    x.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+    /* 🚨 CLOSES ON THE DOWN EVENT, NOT ON `click`.
+     *
+     * The very guard that stops a tap reaching video.js — preventDefault() on
+     * touchstart and pointerdown — also suppresses the click the browser would have
+     * synthesised afterwards. So the button swallowed the tap and then never heard
+     * about it, and on a phone the x did nothing at all. Acting on the down event is
+     * what a close button wants anyway. */
+    let closed = false;
+    const closeBanner = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      if (closed) return;
+      closed = true;
       if (bannerOverlayEl) bannerOverlayEl.style.display = 'none';
       bannerOverlayFor = null;
       try { adBreak.dismissBanner(); } catch (_) { /* it is already hidden */ }
+    };
+    ['pointerdown', 'touchstart', 'mousedown'].forEach((ev) => {
+      x.addEventListener(ev, closeBanner, { passive: false });
     });
+    // Kept for the keyboard, and for anything that fires no pointer event at all.
+    x.addEventListener('click', closeBanner);
     bannerOverlayEl.appendChild(x);
 
     host.appendChild(bannerOverlayEl);

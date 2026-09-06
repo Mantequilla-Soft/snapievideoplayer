@@ -1154,7 +1154,14 @@ body.tv-fullscreen-mode .vjs-tech {
 .video-js .vjs-ad-skip {
   position: absolute;
   right: 12px;
-  bottom: 56px;
+  /* 🚨 MEASURED OFF THE CONTROL BAR, not off the viewport.
+     video.js gives .vjs-control-bar a height of exactly 3em in the player's own
+     font-size, so this sits just above it at every player size. A fixed 56px with a
+     `max-width: 600px` override was wrong twice over: the media query reads the
+     VIEWPORT, which inside an embed is the iframe and not the phone, and on a short
+     embed 56px is a third of the way up the picture, which is what "it sits in the
+     middle" was. */
+  bottom: calc(3em + 8px);
   /* Above .vjs-control-bar (5). It sits in the corner the bar reaches, and skipping
      an ad must not depend on the controls being faded out. */
   z-index: 6;
@@ -1200,7 +1207,8 @@ body.tv-fullscreen-mode .vjs-tech {
 @media (max-width: 600px) {
   /* Just clear of the control bar rather than floating well above it: 44px left a
      gap wide enough that the button read as unmoored from the player's own chrome. */
-  .video-js .vjs-ad-skip { right: 8px; bottom: 36px; padding: 5px 9px; font-size: 12px; }
+  /* Position is handled by calc(3em + 8px) on the base rule, at every size. */
+  .video-js .vjs-ad-skip { right: 8px; padding: 5px 9px; font-size: 12px; }
   .video-js .vjs-banner-close { width: 28px; height: 28px; font-size: 18px; opacity: 0.97; }
 }
 
@@ -1293,21 +1301,22 @@ body.tv-fullscreen-mode .vjs-tech {
 /* Close. Bigger than the burned one's, because this is a touch surface. */
 .video-js .vjs-banner-overlay-close {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: 3px;
+  right: 3px;
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
-  /* A touch target, but still small enough to leave the banner readable. */
-  width: 26px;
-  height: 26px;
+  /* Small. It sits in the corner of somebody's paid artwork, and the banner is only
+     a couple of hundred pixels wide on a phone, where 26px ate the corner of it. */
+  width: 20px;
+  height: 20px;
   padding: 0;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.55);
   color: #fff;
-  font-size: 17px;
+  font-size: 14px;
   line-height: 1;
   cursor: pointer;
 }
