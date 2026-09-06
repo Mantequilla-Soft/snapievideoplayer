@@ -1195,18 +1195,21 @@ body.tv-fullscreen-mode .vjs-tech {
   display: none;
   align-items: center;
   gap: 5px;
-  padding: 6px 11px;
+  padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.66);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
+  /* Quiet on purpose. It has to be findable the moment somebody wants out of the ad
+     and invisible until then, so it is grey on a soft panel rather than white on
+     black. The ready state below is the only part that brightens. */
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
   /* So the countdown does not jitter the box width as it ticks. */
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  border: 1px solid transparent;
+  border: 1px solid rgba(255, 255, 255, 0.22);
 }
 
 /* Waiting: present, readable, plainly not pressable yet. */
@@ -1214,16 +1217,19 @@ body.tv-fullscreen-mode .vjs-tech {
 
 /* Ready. The border is the whole signal that it became pressable, which is why the
  * waiting state reserves the space for one. */
+/* Actionable, so a step up from the countdown — but still grey, not white. */
 .video-js .vjs-ad-skip-ready {
   pointer-events: auto;
   cursor: pointer;
-  border-color: rgba(255, 255, 255, 0.45);
-  transition: background 120ms ease, border-color 120ms ease;
+  color: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.36);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 .video-js .vjs-ad-skip-ready:hover,
 .video-js .vjs-ad-skip-ready:focus-visible {
-  background: rgba(0, 0, 0, 0.85);
-  border-color: rgba(255, 255, 255, 0.75);
+  background: rgba(0, 0, 0, 0.8);
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #fff;
 }
 .video-js .vjs-ad-skip-ready:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
@@ -1235,7 +1241,7 @@ body.tv-fullscreen-mode .vjs-tech {
   /* Just clear of the control bar rather than floating well above it: 44px left a
      gap wide enough that the button read as unmoored from the player's own chrome. */
   /* Position is handled by calc(3em + 8px) on the base rule, at every size. */
-  .video-js .vjs-ad-skip { right: 8px; padding: 5px 9px; font-size: 12px; }
+  .video-js .vjs-ad-skip { right: 8px; padding: 4px 9px; font-size: 10px; }
   .video-js .vjs-banner-close { width: 28px; height: 28px; font-size: 18px; opacity: 0.97; }
 }
 
