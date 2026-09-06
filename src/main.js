@@ -1741,24 +1741,11 @@ function updateBannerOverlay(show) {
   }
   bannerOverlayEl.style.display = 'block';
 
-  /* 🚨 THE CLICK AREA STOPS WHERE THE CONTROLS START — the banner itself does not.
-   *
-   * A banner sits low in the frame by design, so on a small player it overlaps the
-   * progress bar. Moving the banner up would take the advertiser out of the position
-   * they bought, so only the anchor is trimmed: the artwork still draws over the
-   * controls, and the strip of it that covers them is simply not clickable. Without
-   * this, scrubbing to the banner's own position opened the advertiser's link.
-   *
-   * Measured rather than derived, because the booked offset is a percentage of the
-   * frame and the control bar is a fixed height, so where they meet depends on the
-   * player's current size. Re-run on every tick, which is what handles a resize. */
-  const hitEl = bannerOverlayEl.querySelector('.vjs-banner-overlay-hit');
-  if (hitEl) {
-    const bar = host.querySelector('.vjs-control-bar');
-    const barH = bar ? bar.getBoundingClientRect().height : 0;
-    const gap = host.getBoundingClientRect().bottom - bannerOverlayEl.getBoundingClientRect().bottom;
-    hitEl.style.bottom = Math.max(0, Math.round(barH - gap)) + 'px';
-  }
+  /* No measuring here any more. The overlay sits UNDER .vjs-control-bar, so the bar
+   * wins the hit test wherever they overlap and gives it back the moment the controls
+   * fade, which is the same rule the burned banner's click target has always used.
+   * Trimming the anchor as well would have made the banner unclickable in exactly the
+   * state where nothing is in front of it. */
 
   // Same wait as the burned one, from the same server-sent threshold.
   const nowT = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;

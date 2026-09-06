@@ -1243,8 +1243,12 @@ body.tv-fullscreen-mode .vjs-tech {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  /* Above the click-to-play surface, below the controls. */
-  z-index: 6;
+  /* Above the click-to-play surface, BELOW the controls (z-index 5). The banner is a
+     layer in the picture, not chrome: the playhead has to stay both visible and
+     usable over it. Being under the bar is also what keeps a scrub from opening the
+     advertiser's link, since video.js drops `pointer-events` on the bar once the
+     controls fade, so the banner is clickable exactly when they are out of the way. */
+  z-index: 3;
   display: none;
   overflow: hidden;
   border-radius: 4px;
