@@ -130,6 +130,29 @@ export function createAdBreak() {
     /** The banner running on this playback, or null. */
     get bannerInfo() { return banner; },
 
+    /** The creative to DRAW, when the server agreed to hand it over. Null when burned. */
+    get bannerOverlay() { return (banner && banner.overlay) || null; },
+
+    /**
+     * An overlay banner was on screen for its booked time.
+     *
+     * A burned banner measures itself, because the player must fetch bytes only the
+     * stitcher can produce. An overlay is drawn from a CDN asset and nothing about it
+     * reaches the server, so this is the only signal there is. The server still refuses
+     * a claim that arrives too early, so a page cannot bill an advertiser the moment it
+     * loads.
+     */
+    reportBannerShown() {
+      const sid = (session && session.sid) || bannerSid;
+      if (!sid) return;
+      fetch(`${AD_BASE}/m/${encodeURIComponent(sid)}/banner-shown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        keepalive: true,
+      }).catch(() => { /* an unreported impression is the advertiser's loss, not a crash */ });
+    },
+
     /**
      * Is the banner on screen at this moment?
      *
@@ -155,7 +178,7 @@ export function createAdBreak() {
      * Ask whether this playback carries a spot. Returns the stitched manifest URL,
      * or null to play the content manifest exactly as before.
      */
-    async request({ owner, permlink, viewer, country, manifestUrl }) {
+    async request({ owner, permlink, viewer, country, manifestUrl, bannerOverlay }) {
       session = null;
       window_ = null;
       banner = null;
@@ -169,6 +192,10 @@ export function createAdBreak() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             owner, permlink, viewer: viewer || null, country: country || null, manifestUrl, capId: CAP_ID,
+            /* Ask for the banner to be handed over rather than burned in, when this
+             * player cannot close a burned one. The server does not guess: it is the
+             * client that knows what it can do. */
+            bannerOverlay: bannerOverlay === true,
             recentAdKeys: recentAdKeys(),
           }),
         });

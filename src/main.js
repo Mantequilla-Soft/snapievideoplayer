@@ -569,7 +569,10 @@ function initializePlayer() {
     // The banner is independent of the spot: it can run on a playback with no spot
     // at all, so it is driven on its own terms.
     const bannerOn = adBreak.isBannerVisible(currentTime);
+    // Exactly one of these does anything: a burned banner needs a click target over
+    // pixels that are already there, an overlay one is drawn by us.
     updateBannerClick(bannerOn);
+    updateBannerOverlay(bannerOn);
     // The clean copy is only worth holding while there is a banner to close. Built
     // when one starts, torn down when it ends.
     // ⚠️ Never tear down a shadow a dismissal has claimed. Closing the banner clears
@@ -1619,7 +1622,122 @@ function updateSkipControl(state) {
   skipEl.style.display = 'inline-flex';
 }
 
+/* Draw the banner ourselves, when the server handed us the creative instead of
+ * burning it in. Mobile only — see the request above for why.
+ *
+ * Positioned by the SAME placement percentages the burned version uses, so the two
+ * look alike and the geometry has one definition. The disclosure is drawn here too:
+ * a burned banner carries its label in the pixels, and an overlay has to draw its
+ * own. It is not optional in either case.
+ */
+let bannerOverlayEl = null;
+let bannerOverlayFor = null;
+let bannerShownReported = false;
+let bannerShownSince = 0;
+
+function updateBannerOverlay(show) {
+  const ov = adBreak.bannerOverlay;
+  if (!show || !ov || (!ov.imageUrl && !ov.videoUrl)) {
+    if (bannerOverlayEl) bannerOverlayEl.style.display = 'none';
+    return;
+  }
+  const host = player && player.el && player.el();
+  if (!host) return;
+
+  const key = ov.imageUrl || ov.videoUrl;
+  if (!bannerOverlayEl || bannerOverlayFor !== key) {
+    if (bannerOverlayEl && bannerOverlayEl.parentNode) bannerOverlayEl.parentNode.removeChild(bannerOverlayEl);
+    bannerOverlayFor = key;
+    const info = adBreak.bannerInfo || {};
+    const pl = info.placement || {};
+
+    bannerOverlayEl = document.createElement('div');
+    bannerOverlayEl.className = 'vjs-banner-overlay';
+    bannerOverlayEl.style.width = (Number(pl.widthPct) || 60) + '%';
+    bannerOverlayEl.style.bottom = (Number(pl.bottomPct) || 6) + '%';
+    bannerOverlayEl.style.maxHeight = (Number(pl.maxHeightPct) || 15) + '%';
+
+    // The creative. A video one loops and is silent, exactly as the burned version is:
+    // a banner shares the frame with something the viewer chose, and does not get to
+    // take over their sound.
+    let media;
+    if (ov.videoUrl) {
+      media = document.createElement('video');
+      media.muted = true;
+      media.loop = true;
+      media.playsInline = true;
+      media.autoplay = true;
+      if (Hls.isSupported()) {
+        const h = new Hls({ maxBufferLength: 10 });
+        h.loadSource(ov.videoUrl);
+        h.attachMedia(media);
+        media.__hls = h;
+      } else {
+        media.src = ov.videoUrl;
+      }
+    } else {
+      media = document.createElement('img');
+      media.src = ov.imageUrl;
+      media.alt = '';
+    }
+    media.className = 'vjs-banner-overlay-media';
+    bannerOverlayEl.appendChild(media);
+
+    // Required disclosure, in the banner's own corner so it travels with the ad.
+    const label = document.createElement('span');
+    label.className = 'vjs-banner-overlay-label';
+    label.textContent = ov.label || 'Ad';
+    bannerOverlayEl.appendChild(label);
+
+    // The whole thing is the click target when there is somewhere to go.
+    const clickUrl = (info.brand && info.brand.clickUrl) || null;
+    if (clickUrl) {
+      const a = document.createElement('a');
+      a.className = 'vjs-banner-overlay-hit';
+      a.href = clickUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.setAttribute('aria-label', 'Open ' + ((info.brand && info.brand.productName) || 'the advertiser') + "'s website in a new tab");
+      a.addEventListener('click', (e) => e.stopPropagation());
+      bannerOverlayEl.appendChild(a);
+    }
+
+    // Close. Instant here: there is nothing to re-download, only an element to hide.
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'vjs-banner-overlay-close';
+    x.setAttribute('aria-label', 'Close this ad');
+    x.textContent = '\u00d7';
+    x.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (bannerOverlayEl) bannerOverlayEl.style.display = 'none';
+      bannerOverlayFor = null;
+      try { adBreak.dismissBanner(); } catch (_) { /* it is already hidden */ }
+    });
+    bannerOverlayEl.appendChild(x);
+
+    host.appendChild(bannerOverlayEl);
+    bannerShownSince = Date.now();
+    bannerShownReported = false;
+  }
+  bannerOverlayEl.style.display = 'block';
+
+  /* Reported once, after it has actually been on screen for what was booked.
+   *
+   * The server refuses an early claim as well, so this is belt and braces rather than
+   * the only guard — but claiming honestly from here means the refusal never has to
+   * fire in normal use. */
+  const booked = Number((adBreak.bannerInfo || {}).durationSeconds) || 0;
+  if (!bannerShownReported && booked > 0 && (Date.now() - bannerShownSince) >= booked * 1000) {
+    bannerShownReported = true;
+    try { adBreak.reportBannerShown(); } catch (_) { /* an unreported impression is not a crash */ }
+  }
+}
+
 function updateBannerClick(show) {
+  // An overlay banner draws its own click target, so this one must stay out of the way.
+  if (adBreak.bannerOverlay) { if (bannerClickEl) bannerClickEl.style.display = 'none'; if (bannerCloseEl) bannerCloseEl.style.display = 'none'; return; }
   const info = adBreak.bannerInfo;
   const clickUrl = info && info.brand && info.brand.clickUrl;
   if (!show || !clickUrl) {
@@ -2187,6 +2305,17 @@ async function loadVideoFromData(videoData) {
       permlink: videoData.permlink,
       viewer: viewerAccount(),
       manifestUrl: videoData.videoUrl,
+      /* On a handheld, ask for the banner to be handed over instead of burned in.
+       *
+       * A burned banner cannot be closed there: removing it means replacing bytes
+       * already downloaded, the only way to do that without a pause is a second video
+       * stream, and mobile browsers will not reliably give us one. Drawn in the page,
+       * closing it is hiding an element.
+       *
+       * The trade is that a filter rule can hide it, which is exactly what burning
+       * exists to prevent. Accepted here, because the alternative on a phone is an ad
+       * nobody can close. */
+      bannerOverlay: isHandheld(),
     });
     if (stitched) {
       primaryUrl = stitched;
