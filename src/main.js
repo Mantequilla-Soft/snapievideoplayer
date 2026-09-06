@@ -1440,16 +1440,50 @@ let bannerClickEl = null;
 let bannerCloseEl = null;
 /* How much playback to leave untouched when a banner is closed.
  *
- * Sized against a SEGMENT, not against a feeling: the player has to keep playing while
- * VHS fetches a clean replacement, and segments here are around six seconds. Anything
- * much under that and the playhead arrives at the hole first, which is a stall.
+ * 🚨 MEASURED, not guessed. We know nothing about the viewer's connection or device,
+ * and any fixed number is wrong for somebody: too small on a phone on a bad signal and
+ * it stalls, large enough for that phone and the banner outstays its welcome on fibre.
  *
- * Eight, not six, so there is a whole segment of runway PLUS slack for a slow round
- * trip. The cost is only that the banner lingers a little longer, and the controls
- * disappear on the click either way, so the viewer is answered immediately. Raise it
- * further if a stall is ever seen: erring long is nearly free, erring short is the
- * one failure anybody notices. */
-const BANNER_REMOVE_MARGIN_S = 8;
+ * The player already knows what it needs. VHS measures its own throughput, and the
+ * playlist declares the rendition's bitrate and segment length, so how long a
+ * replacement segment takes is arithmetic rather than a hunch:
+ *
+ *     seconds to fetch one segment = segment length x rendition bitrate / throughput
+ *
+ * The margin is a segment (the one being played through) plus several fetches' worth
+ * of slack, so a connection that is just barely keeping up still gets its replacement
+ * in time. Clamped at both ends: never less than a segment and a half, because
+ * anything under that cannot survive a single slow response, and never more than half
+ * a minute, because past that the banner has effectively not been closed.
+ *
+ * Falls back to a deliberately generous number when the measurements are missing. An
+ * over-long margin costs a few extra seconds of banner; a short one costs a stall,
+ * and only one of those is worth avoiding. */
+const BANNER_MARGIN_MIN_S = 9;
+const BANNER_MARGIN_MAX_S = 30;
+const BANNER_MARGIN_FALLBACK_S = 15;
+
+function bannerRemoveMargin(tech) {
+  try {
+    const vhs = tech && tech.vhs;
+    const media = vhs && vhs.playlists && vhs.playlists.media && vhs.playlists.media();
+    const target = Number(media && media.targetDuration) || 0;
+    // What VHS has actually measured, in bits per second.
+    const throughput = Number(vhs && vhs.bandwidth) || 0;
+    // What this rendition costs, from the playlist itself.
+    const bitrate = Number(media && media.attributes && media.attributes.BANDWIDTH) || 0;
+    if (!target || !throughput || !bitrate) return BANNER_MARGIN_FALLBACK_S;
+
+    const fetchSeconds = (target * bitrate) / throughput;
+    // One segment to play through, plus three fetches of slack. Three because a single
+    // slow response should not be able to catch us out, and the cost of being wrong in
+    // this direction is only that the banner lingers.
+    const wanted = target + (fetchSeconds * 3);
+    return Math.min(BANNER_MARGIN_MAX_S, Math.max(BANNER_MARGIN_MIN_S, wanted));
+  } catch (_) {
+    return BANNER_MARGIN_FALLBACK_S;
+  }
+}
 let bannerBuiltFor = null;
 /**
  * The Skip control on a spot: bottom-right, above the control bar.
@@ -1613,7 +1647,7 @@ async function dismissBanner() {
       const tech = player.tech({ IWillNotUseThisInPlugins: true });
       const su = tech && tech.vhs && tech.vhs.sourceUpdater_;
       if (su && typeof su.remove === 'function') {
-        const from = at + BANNER_REMOVE_MARGIN_S;
+        const from = at + bannerRemoveMargin(tech);
         const dur = player.duration();
         const to = isFinite(dur) && dur > from ? dur : from + 600;
         su.remove('video', from, to);
