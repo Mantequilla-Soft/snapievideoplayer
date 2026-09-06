@@ -1217,19 +1217,12 @@ body.tv-fullscreen-mode .vjs-tech {
 
 /* Ready. The border is the whole signal that it became pressable, which is why the
  * waiting state reserves the space for one. */
-/* Actionable, so a step up from the countdown — but still grey, not white. */
+/* Becoming pressable changes what it DOES, not how loud it is. It holds the same
+   grey from the countdown through to the press: no brighter text, no stronger rim,
+   no hover lift. The wording carries the change of state on its own. */
 .video-js .vjs-ad-skip-ready {
   pointer-events: auto;
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.85);
-  border-color: rgba(255, 255, 255, 0.36);
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-.video-js .vjs-ad-skip-ready:hover,
-.video-js .vjs-ad-skip-ready:focus-visible {
-  background: rgba(0, 0, 0, 0.8);
-  border-color: rgba(255, 255, 255, 0.6);
-  color: #fff;
 }
 .video-js .vjs-ad-skip-ready:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
