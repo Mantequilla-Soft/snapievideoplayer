@@ -572,7 +572,11 @@ function initializePlayer() {
     updateBannerClick(bannerOn);
     // The clean copy is only worth holding while there is a banner to close. Built
     // when one starts, torn down when it ends.
-    if (bannerOn) ensureShadow(); else teardownShadow();
+    // ⚠️ Never tear down a shadow a dismissal has claimed. Closing the banner clears
+    // it from adBreak synchronously, so the very next tick sees no banner — and used
+    // to destroy the preloaded copy a moment before the swap could use it.
+    if (bannerOn) ensureShadow();
+    else if (!shadowClaimed) teardownShadow();
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
@@ -1687,6 +1691,8 @@ function traceDismiss(label) {
  */
 let shadowEl = null;
 let shadowFor = null;
+// Set while a dismissal is using the shadow, so the timeupdate tick leaves it alone.
+let shadowClaimed = false;
 
 function shadowSourceUrl() {
   try {
@@ -1749,8 +1755,61 @@ function teardownShadow() {
   shadowFor = null;
 }
 
+/**
+ * Switch to the preloaded banner-free copy, if it is ready. Returns whether it was.
+ *
+ * Nothing is fetched and nothing is discarded: the shadow has been decoding the same
+ * seconds without the banner for as long as the banner has been on screen, so this is
+ * a change of which element is visible and audible.
+ *
+ * Refuses unless the shadow has actually buffered past the playhead. One still catching
+ * up would stall exactly like a refetch, which is the bug this exists to avoid.
+ */
+function swapToShadow(at) {
+  try {
+    let ahead = null;
+    if (shadowEl && shadowEl.buffered && shadowEl.buffered.length) {
+      ahead = shadowEl.buffered.end(shadowEl.buffered.length - 1) - at;
+    }
+    /* eslint-disable-next-line no-console */
+    console.log('[ad-dismiss] shadow:', {
+      exists: !!shadowEl,
+      readyState: shadowEl ? shadowEl.readyState : null,
+      bufferedAheadS: ahead == null ? null : Number(ahead.toFixed(2)),
+      willSwap: !!(shadowEl && shadowEl.readyState >= 3 && ahead != null && ahead > 2),
+    });
+    if (!shadowEl || shadowEl.readyState < 3 || ahead == null || ahead <= 2) return false;
+
+    const wasPlaying = !player.paused();
+    shadowEl.currentTime = at;
+    shadowEl.muted = player.muted();
+    shadowEl.volume = player.volume();
+    shadowEl.classList.add('vjs-shadow-live');
+    try { player.pause(); } catch (_) { /* already still */ }
+    try { player.el().classList.add('vjs-hidden-under-shadow'); } catch (_) { /* cosmetic */ }
+    if (wasPlaying) { const pp = shadowEl.play(); if (pp && pp.catch) pp.catch(() => {}); }
+    // It is the element being watched now, so it must never be torn down as "the
+    // shadow" again.
+    shadowFor = null;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function dismissBanner() {
   try { traceDismiss('x clicked'); } catch (_) { /* tracing must never break the close */ }
+  /* 🚨 CLAIM THE SHADOW FIRST, and swap before awaiting anything.
+   *
+   * adBreak.dismissBanner() clears the banner synchronously, so a timeupdate tick
+   * during the await saw no banner and destroyed the preloaded copy — the swap then
+   * found `exists: false` and fell through to a refetch. That is why fetches kept
+   * appearing on the click however the fast path was written.
+   *
+   * The swap does not need the server anyway. The shadow is already playing clean
+   * content, so switching to it is complete on its own; telling the checker to stop
+   * burning is bookkeeping for segments this playback will now never ask for. */
+  shadowClaimed = true;
   if (bannerClickEl) bannerClickEl.style.display = 'none';
   if (bannerCloseEl) bannerCloseEl.style.display = 'none';
   try {
@@ -1758,62 +1817,23 @@ async function dismissBanner() {
     const end = adBreak.endOfBreak();
     if (isFinite(end) && at != null && end <= at) adBreak.retireSpot();
 
+    /* Swap FIRST, tell the server after.
+     *
+     * The shadow is already playing clean content, so the switch is complete without
+     * the server hearing about it. Awaiting the request before swapping is what let a
+     * timeupdate tick run in between and tear the shadow down; it also put a network
+     * round trip in front of a click that should feel instant.
+     *
+     * The request still goes, unawaited, so segments this playback never reaches are
+     * not burned and the dismissal is recorded against the impression. */
+    if (swapToShadow(at)) {
+      try { adBreak.dismissBanner(); } catch (_) { /* the swap already happened */ }
+      return;
+    }
+
     await adBreak.dismissBanner();
 
     if (at == null) return;
-
-    /* INSTANT PATH: the clean copy is already buffered, so just switch to it.
-     *
-     * Nothing is fetched here and nothing is thrown away, which is the entire point:
-     * every other route ends in a refetch, and a refetch is the pause. The shadow
-     * element has been decoding the same seconds without the banner for as long as the
-     * banner has been on screen, so the swap is a change of which element is visible
-     * and audible.
-     *
-     * Only taken when the shadow has actually buffered PAST the playhead. A shadow
-     * that is still catching up would stall exactly like a refetch, and then this
-     * would be the same bug wearing a different hat.
-     */
-    /* One line that says which path this click took and why. The difference between
-     * "instant" and every other answer is the difference between a swap and a refetch,
-     * and it is not visible from the outside. */
-    try {
-      let ahead0 = null;
-      if (shadowEl && shadowEl.buffered && shadowEl.buffered.length) {
-        ahead0 = Number((shadowEl.buffered.end(shadowEl.buffered.length - 1) - at).toFixed(2));
-      }
-      /* eslint-disable no-console */
-      console.log('[ad-dismiss] shadow:', {
-        exists: !!shadowEl,
-        readyState: shadowEl ? shadowEl.readyState : null,
-        bufferedAheadS: ahead0,
-        srcTried: shadowFor,
-        willSwap: !!(shadowEl && shadowEl.readyState >= 3 && ahead0 != null && ahead0 > 2),
-      });
-      /* eslint-enable no-console */
-    } catch (_) { /* diagnostics must never break the close */ }
-
-    try {
-      if (shadowEl && shadowEl.readyState >= 3) {
-        const ahead = shadowEl.buffered.length
-          ? shadowEl.buffered.end(shadowEl.buffered.length - 1) - at
-          : 0;
-        if (ahead > 2) {
-          const wasPlayingNow = !player.paused();
-          shadowEl.currentTime = at;
-          shadowEl.muted = player.muted();
-          shadowEl.volume = player.volume();
-          shadowEl.classList.add('vjs-shadow-live');
-          // The main element keeps its place but stops competing for audio and CPU.
-          try { player.pause(); } catch (_) { /* already still */ }
-          try { player.el().classList.add('vjs-hidden-under-shadow'); } catch (_) { /* cosmetic */ }
-          if (wasPlayingNow) { const pp = shadowEl.play(); if (pp && pp.catch) pp.catch(() => {}); }
-          // It is the playing element now, so it must not be torn down with the banner.
-          shadowFor = null;
-          return;
-        }
-      }
-    } catch (_) { /* fall through to the refetch paths below */ }
 
     /* FALLBACK: drop the buffer ahead and let VHS refill it.
      *
