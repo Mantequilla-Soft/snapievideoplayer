@@ -470,10 +470,14 @@ function initializePlayer() {
         // Mac OS: Aggressive buffer cleanup to avoid quota errors (all browsers on Mac)
         const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) ||
                       /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
-        if (isMac && tech.vhs.sourceUpdater_) {
+        // Same correction as the banner path: sourceUpdater_ lives on the playlist
+        // controller, not on the handler, so this has been a silent no-op too.
+        const macMpc = tech && tech.vhs
+          && (tech.vhs.playlistController_ || tech.vhs.masterPlaylistController_);
+        if (isMac && macMpc && macMpc.sourceUpdater_) {
           try {
             const currentTime = player.currentTime();
-            const sourceUpdater = tech.vhs.sourceUpdater_;
+            const sourceUpdater = macMpc.sourceUpdater_;
 
             // Remove old buffered data (keep only 10 seconds behind current time)
             if (currentTime > 10) {
