@@ -1418,8 +1418,10 @@ function updateSponsorLabel(show) {
 
     const from = document.createElement('span');
     from.className = 'vjs-sponsor-from';
-    // Short, and still unambiguous: "Ad" is the disclosure, the handle says whose.
-    from.textContent = brand.account ? 'Ad \u00b7 @' + brand.account : (info.label || 'Ad');
+    /* Just the disclosure word. The Hive handle was the longest thing on the row and
+     * the least useful: the logo and the product name already say whose ad this is,
+     * and every character here is a character of somebody's video covered up. */
+    from.textContent = 'Ad';
     sponsorLabelEl.appendChild(from);
 
     if (brand.productName) {

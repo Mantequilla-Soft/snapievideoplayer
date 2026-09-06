@@ -1052,20 +1052,30 @@ body.tv-fullscreen-mode .vjs-tech {
  * the first row; the slogan is the only part of any length, so it gets a row of its
  * own to scroll along. */
 .vjs-sponsor-note.vjs-sponsor-compact {
+  /* Tucked into the corner and wound in as tight as it goes. The video is the thing
+     the viewer came for, so the disclosure takes the smallest box that stays legible:
+     one type size throughout, a hairline of padding, and lines that sit close. */
+  top: 6px;
+  left: 6px;
   flex-wrap: wrap;
-  gap: 2px 6px;
-  max-width: calc(100% - 20px);
-  padding: 5px 10px 6px 5px;
-  /* No longer a pill: a pill with two rows of text in it reads as a mistake. */
-  border-radius: 12px;
+  gap: 0 6px;
+  max-width: calc(100% - 12px);
+  padding: 3px 8px 4px 3px;
+  border-radius: 10px;
+  font-size: 10px;
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
 }
-.vjs-sponsor-compact .vjs-sponsor-logo { width: 18px; height: 18px; border-radius: 50%; }
+.vjs-sponsor-compact .vjs-sponsor-logo { width: 15px; height: 15px; border-radius: 50%; }
 .vjs-sponsor-compact .vjs-sponsor-from { flex: 0 0 auto; order: 0; }
 /* Shrinkable, so a long product name is clipped with an ellipsis instead of pushing
    the countdown down onto the slogan's row. */
-.vjs-sponsor-compact .vjs-sponsor-name { flex: 0 1 auto; max-width: 52%; font-size: 11px; }
+/* One size for the whole thing. The name keeps its weight, which is enough to tell
+   it from the label beside it without also being taller. */
+.vjs-sponsor-compact .vjs-sponsor-name { flex: 0 1 auto; max-width: 52%; font-size: 10px; }
+.vjs-sponsor-compact .vjs-sponsor-from,
+.vjs-sponsor-compact .vjs-sponsor-resume { font-size: 10px; }
 /* `order: 1` puts it after everything else, and a full-width basis makes that a row
    of its own rather than the tail of the first one. */
 .vjs-sponsor-compact .vjs-sponsor-slogan {
