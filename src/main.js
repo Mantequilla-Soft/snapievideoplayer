@@ -1701,11 +1701,22 @@ function ensureShadow() {
   // One stream is enough on a phone. See the note above.
   if (window.innerWidth <= 768) return;
   const url = shadowSourceUrl();
-  if (!url || shadowFor === url) return;
+  if (!url) {
+    /* eslint-disable-next-line no-console */
+    if (!ensureShadow.warned) { ensureShadow.warned = true; console.log('[ad-dismiss] no shadow: the playing source is not a session playlist'); }
+    return;
+  }
+  if (shadowFor === url) return;
   teardownShadow();
 
   const host = player && player.el && player.el();
-  if (!host || !Hls.isSupported()) return;
+  if (!host || !Hls.isSupported()) {
+    /* eslint-disable-next-line no-console */
+    console.log('[ad-dismiss] no shadow: hls.js unsupported here');
+    return;
+  }
+  /* eslint-disable-next-line no-console */
+  console.log('[ad-dismiss] preloading the banner-free copy:', url);
 
   shadowEl = document.createElement('video');
   shadowEl.className = 'vjs-shadow-clean';
@@ -1763,6 +1774,25 @@ async function dismissBanner() {
      * that is still catching up would stall exactly like a refetch, and then this
      * would be the same bug wearing a different hat.
      */
+    /* One line that says which path this click took and why. The difference between
+     * "instant" and every other answer is the difference between a swap and a refetch,
+     * and it is not visible from the outside. */
+    try {
+      let ahead0 = null;
+      if (shadowEl && shadowEl.buffered && shadowEl.buffered.length) {
+        ahead0 = Number((shadowEl.buffered.end(shadowEl.buffered.length - 1) - at).toFixed(2));
+      }
+      /* eslint-disable no-console */
+      console.log('[ad-dismiss] shadow:', {
+        exists: !!shadowEl,
+        readyState: shadowEl ? shadowEl.readyState : null,
+        bufferedAheadS: ahead0,
+        srcTried: shadowFor,
+        willSwap: !!(shadowEl && shadowEl.readyState >= 3 && ahead0 != null && ahead0 > 2),
+      });
+      /* eslint-enable no-console */
+    } catch (_) { /* diagnostics must never break the close */ }
+
     try {
       if (shadowEl && shadowEl.readyState >= 3) {
         const ahead = shadowEl.buffered.length
