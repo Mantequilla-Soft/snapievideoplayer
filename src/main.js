@@ -575,7 +575,15 @@ function initializePlayer() {
     // ⚠️ Never tear down a shadow a dismissal has claimed. Closing the banner clears
     // it from adBreak synchronously, so the very next tick sees no banner — and used
     // to destroy the preloaded copy a moment before the swap could use it.
-    if (bannerOn) ensureShadow();
+    /* Built AHEAD of the banner, not with it.
+     *
+     * The clean copy needs a few seconds to buffer, and the close button is reachable
+     * from the banner's very first frame. Starting it at the same moment meant an early
+     * click found it unready and fell through to a refetch, which is the pause. A lead
+     * of fifteen seconds is comfortably more than it needs on any connection that can
+     * play the video at all, and costs nothing extra: it is the same stream, started
+     * sooner and still torn down the moment the banner ends. */
+    if (adBreak.bannerDueWithin(currentTime, SHADOW_LEAD_S)) ensureShadow();
     else if (!shadowClaimed) teardownShadow();
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
@@ -1693,6 +1701,8 @@ let shadowEl = null;
 let shadowFor = null;
 // Set while a dismissal is using the shadow, so the timeupdate tick leaves it alone.
 let shadowClaimed = false;
+// How far ahead of a banner to start buffering the clean copy.
+const SHADOW_LEAD_S = 15;
 
 function shadowSourceUrl() {
   try {

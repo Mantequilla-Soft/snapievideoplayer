@@ -302,6 +302,21 @@ export function createAdBreak() {
     retireSpot() { spotRetired = true; },
     get spotRetired() { return spotRetired; },
 
+    /**
+     * Is a banner due within the next `lead` seconds (or on screen already)?
+     *
+     * So the clean copy can be fetched BEFORE the banner appears. Starting it when the
+     * banner starts is too late: it needs seconds to buffer, and the viewer can reach
+     * for the close button in the first of them — which is exactly the case that fell
+     * through to a refetch and paused.
+     */
+    bannerDueWithin(playerTime, lead) {
+      if (!bannerWindow || !isFinite(playerTime)) return false;
+      const t = this.contentTime(playerTime);
+      const end = bannerWindow.start + bannerWindow.duration;
+      return t >= (bannerWindow.start - (lead || 0)) && t < end;
+    },
+
     /** Does this spot offer a skip at all? Decided by the server, not here. */
     get skipOffered() { return skipAfter != null; },
 
