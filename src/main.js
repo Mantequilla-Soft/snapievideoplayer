@@ -1438,6 +1438,18 @@ function updateAdCountdown(secs) {
 let bannerClickEl = null;
 // The close button that sits with it. Built and torn down together.
 let bannerCloseEl = null;
+/* How much playback to leave untouched when a banner is closed.
+ *
+ * Sized against a SEGMENT, not against a feeling: the player has to keep playing while
+ * VHS fetches a clean replacement, and segments here are around six seconds. Anything
+ * much under that and the playhead arrives at the hole first, which is a stall.
+ *
+ * Eight, not six, so there is a whole segment of runway PLUS slack for a slow round
+ * trip. The cost is only that the banner lingers a little longer, and the controls
+ * disappear on the click either way, so the viewer is answered immediately. Raise it
+ * further if a stall is ever seen: erring long is nearly free, erring short is the
+ * one failure anybody notices. */
+const BANNER_REMOVE_MARGIN_S = 8;
 let bannerBuiltFor = null;
 /**
  * The Skip control on a spot: bottom-right, above the control bar.
@@ -1580,9 +1592,18 @@ async function dismissBanner() {
      * a 302 to the plain original. Removing the buffered range ahead of the playhead
      * makes VHS refetch exactly those seconds, and they come back without the banner.
      *
-     * A margin, because a buffer emptied at the playhead stalls playback for real. The
-     * banner survives another second and a half, which nobody notices; a stall,
-     * everybody does.
+     * ⚠️ THE MARGIN IS THE WHOLE TRICK, and it has to be bigger than it looks.
+     *
+     * It buys the time VHS needs to fetch a replacement segment before the playhead
+     * reaches the hole. At a second and a half it did not: a segment is about six
+     * seconds and the round trip plus download regularly outruns that, so playback
+     * caught up with the gap and stalled — the exact pause the buffer path exists to
+     * avoid.
+     *
+     * A whole segment of runway is the honest number. The cost is that the banner
+     * stays a few seconds longer, which is easy to accept because the CONTROLS vanish
+     * on the click: the viewer gets their acknowledgement immediately and the picture
+     * catches up. A stall is the thing they would actually notice.
      *
      * `sourceUpdater_` is internal, so this is guarded and falls through to the source
      * swap when it is not there — Safari plays HLS natively and has no VHS at all. The
@@ -1592,7 +1613,7 @@ async function dismissBanner() {
       const tech = player.tech({ IWillNotUseThisInPlugins: true });
       const su = tech && tech.vhs && tech.vhs.sourceUpdater_;
       if (su && typeof su.remove === 'function') {
-        const from = at + 1.5;
+        const from = at + BANNER_REMOVE_MARGIN_S;
         const dur = player.duration();
         const to = isFinite(dur) && dur > from ? dur : from + 600;
         su.remove('video', from, to);
