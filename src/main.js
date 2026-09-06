@@ -1645,13 +1645,30 @@ async function dismissBanner() {
      */
     try {
       const tech = player.tech({ IWillNotUseThisInPlugins: true });
-      const su = tech && tech.vhs && tech.vhs.sourceUpdater_;
+      const vhs = tech && tech.vhs;
+      const su = vhs && vhs.sourceUpdater_;
       if (su && typeof su.remove === 'function') {
         const from = at + bannerRemoveMargin(tech);
         const dur = player.duration();
         const to = isFinite(dur) && dur > from ? dur : from + 600;
         su.remove('video', from, to);
         su.remove('audio', from, to);
+
+        /* 🚨 REMOVING IS NOT ENOUGH. VHS has to be told it no longer has them.
+         *
+         * The loader tracks which segments it has APPENDED, not what is currently in
+         * the buffer, so after a remove it still believes that range is done and never
+         * refetches it. Playback simply runs into the hole and stalls — which is why
+         * widening the margin only moved the pause later instead of preventing it.
+         *
+         * resetLoader() clears that bookkeeping (and, unlike resetEverything(), leaves
+         * the buffer alone — that one removes from 0 to Infinity and rebuffers the
+         * lot). monitorBuffer_() then kicks a refill immediately rather than waiting
+         * for the next poll, so the replacement is on its way while the playhead still
+         * has its margin to play through. */
+        const loader = vhs.mainSegmentLoader_;
+        if (loader && typeof loader.resetLoader === 'function') loader.resetLoader();
+        if (loader && typeof loader.monitorBuffer_ === 'function') loader.monitorBuffer_();
         return;
       }
     } catch (_) { /* fall through to the source swap */ }
