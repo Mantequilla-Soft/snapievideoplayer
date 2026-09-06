@@ -553,6 +553,11 @@ function initializePlayer() {
       // into a beat. Never while the spot is already playing.
       const left = inside ? null : adBreak.secondsUntil(currentTime);
       updateAdCountdown(left != null && left <= AD_COUNTDOWN_FROM ? Math.max(1, Math.ceil(left)) : null);
+      // Skip: on screen for the WHOLE spot, counting down first and pressable after.
+      // A button that appears partway through is one nobody is looking for.
+      updateSkipControl(inside && adBreak.skipOffered
+        ? { until: adBreak.secondsUntilSkip(currentTime), ready: adBreak.canSkip(currentTime) }
+        : null);
     }
     // The banner is independent of the spot: it can run on a playback with no spot
     // at all, so it is driven on its own terms.
@@ -1431,12 +1436,58 @@ function updateAdCountdown(secs) {
  * where the pixels are, and only while the banner is actually on screen.
  */
 let bannerClickEl = null;
+// The close button that sits with it. Built and torn down together.
+let bannerCloseEl = null;
 let bannerBuiltFor = null;
+/**
+ * The Skip control on a spot: bottom-right, above the control bar.
+ *
+ * One element with two states so it never moves under the cursor. Waiting is a plain
+ * div, not a button: a control that looks pressable and does nothing is worse than one
+ * that plainly is not ready yet.
+ *
+ * Pressing it tells the server (which counts the spot as watched, since the button only
+ * exists after the threshold) and seeks to the end of the break. The spot is spliced
+ * INTO the playlist, so moving the playhead past it is the whole of skipping.
+ */
+let skipEl = null;
+function updateSkipControl(state) {
+  if (!state) {
+    if (skipEl) skipEl.style.display = 'none';
+    return;
+  }
+  const host = player && player.el && player.el();
+  if (!host) return;
+  if (!skipEl) {
+    skipEl = document.createElement('button');
+    skipEl.type = 'button';
+    skipEl.className = 'vjs-ad-skip';
+    // Must not also reach the video surface, or the click toggles play/pause.
+    skipEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (skipEl.dataset.ready !== '1') return;
+      try { adBreak.recordSkip(); } catch (_) { /* the skip still happens */ }
+      const to = adBreak.endOfBreak();
+      if (isFinite(to)) { try { player.currentTime(to); } catch (_) { /* it plays out */ } }
+    });
+    host.appendChild(skipEl);
+  }
+  const ready = !!state.ready;
+  skipEl.dataset.ready = ready ? '1' : '0';
+  skipEl.className = 'vjs-ad-skip' + (ready ? ' vjs-ad-skip-ready' : ' vjs-ad-skip-waiting');
+  skipEl.textContent = ready
+    ? 'Skip ad'
+    : 'Skip in ' + Math.max(1, Math.ceil(Number(state.until) || 0));
+  skipEl.style.display = 'inline-flex';
+}
+
 function updateBannerClick(show) {
   const info = adBreak.bannerInfo;
   const clickUrl = info && info.brand && info.brand.clickUrl;
   if (!show || !clickUrl) {
     if (bannerClickEl) bannerClickEl.style.display = 'none';
+    if (bannerCloseEl) bannerCloseEl.style.display = 'none';
     return;
   }
   if (!bannerClickEl || bannerBuiltFor !== clickUrl) {
@@ -1468,8 +1519,70 @@ function updateBannerClick(show) {
     bannerClickEl.style.aspectRatio = String(aspect);
     bannerClickEl.style.maxHeight = maxHeightPct + '%';
     host.appendChild(bannerClickEl);
+
+    /* Close, just above the banner's top-right corner.
+     *
+     * OUTSIDE the click target, deliberately: inside it, closing an ad would also
+     * open the ad. A sibling positioned against the same host, offset off the top of
+     * the banner box so it never covers the advertiser's artwork.
+     */
+    bannerCloseEl = document.createElement('button');
+    bannerCloseEl.type = 'button';
+    bannerCloseEl.className = 'vjs-banner-close';
+    bannerCloseEl.setAttribute('aria-label', 'Close this ad');
+    bannerCloseEl.title = 'Close this ad';
+    bannerCloseEl.textContent = '\u00d7';
+    bannerCloseEl.style.right = ((100 - widthPct) / 2) + '%';
+    bannerCloseEl.style.bottom = 'calc(' + bottomPct + '% + ' + maxHeightPct + '%)';
+    bannerCloseEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dismissBanner();
+    });
+    host.appendChild(bannerCloseEl);
   }
   bannerClickEl.style.display = 'block';
+  if (bannerCloseEl) bannerCloseEl.style.display = 'flex';
+}
+
+/**
+ * Close the banner: swap the source, do not try to un-burn what is downloaded.
+ *
+ * 🚨 The covered seconds keep the SAME segment urls whether or not a banner is on
+ * them, so dropping the buffer just refetches the burned bytes and the browser serves
+ * them from its own cache. A dismissed session's playlist points those seconds at the
+ * CDN original instead, so RELOADING THE SOURCE genuinely changes which files play.
+ *
+ * The dismiss request is awaited: the playlist is only clean once the server knows, and
+ * reloading first is a race the viewer loses about half the time.
+ *
+ * A spot already passed is retired, because reloading walks the playhead through zero
+ * and a spot booked at the start of the video is inside its own window there. Its
+ * chrome would otherwise come back over a video that is merely reloading.
+ */
+async function dismissBanner() {
+  if (bannerClickEl) bannerClickEl.style.display = 'none';
+  if (bannerCloseEl) bannerCloseEl.style.display = 'none';
+  try {
+    const at = player && isFinite(player.currentTime()) ? player.currentTime() : null;
+    const end = adBreak.endOfBreak();
+    if (isFinite(end) && at != null && end <= at) adBreak.retireSpot();
+
+    await adBreak.dismissBanner();
+
+    if (at == null) return;
+    const wasPlaying = player && !player.paused();
+    const current = player.currentSource();
+    if (!current || !current.src) return;
+    player.src(current);
+    player.load();
+    player.one('loadedmetadata', () => {
+      try {
+        player.currentTime(at);
+        if (wasPlaying) { const p = player.play(); if (p && p.catch) p.catch(() => {}); }
+      } catch (_) { /* the viewer can press play */ }
+    });
+  } catch (_) { /* the banner runs its course */ }
 }
 
 /**
