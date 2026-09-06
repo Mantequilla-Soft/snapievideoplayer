@@ -1044,19 +1044,37 @@ body.tv-fullscreen-mode .vjs-tech {
 }
 
 /* ── Compact: one line, for a player too small to give a card away to ───────── */
+/* TWO ROWS: who it is on the first, what they say on the second.
+ *
+ * One line meant the slogan competed with the advertiser's own name for the width
+ * that was left, and on a phone both lost — the name was clipped and the slogan was
+ * a moving sliver. The identity and the countdown are short and fixed, so they keep
+ * the first row; the slogan is the only part of any length, so it gets a row of its
+ * own to scroll along. */
 .vjs-sponsor-note.vjs-sponsor-compact {
-  flex-wrap: nowrap;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 2px 6px;
   max-width: calc(100% - 20px);
-  padding: 4px 9px 4px 5px;
-  border-radius: 999px;
+  padding: 5px 10px 6px 5px;
+  /* No longer a pill: a pill with two rows of text in it reads as a mistake. */
+  border-radius: 12px;
   white-space: nowrap;
   overflow: hidden;
 }
 .vjs-sponsor-compact .vjs-sponsor-logo { width: 18px; height: 18px; border-radius: 50%; }
 .vjs-sponsor-compact .vjs-sponsor-from { flex: 0 0 auto; order: 0; }
-.vjs-sponsor-compact .vjs-sponsor-name { flex: 0 0 auto; max-width: 38%; }
-.vjs-sponsor-compact .vjs-sponsor-slogan { flex: 1 1 auto; }
+/* Shrinkable, so a long product name is clipped with an ellipsis instead of pushing
+   the countdown down onto the slogan's row. */
+.vjs-sponsor-compact .vjs-sponsor-name { flex: 0 1 auto; max-width: 52%; font-size: 11px; }
+/* `order: 1` puts it after everything else, and a full-width basis makes that a row
+   of its own rather than the tail of the first one. */
+.vjs-sponsor-compact .vjs-sponsor-slogan {
+  order: 1;
+  flex: 0 0 100%;
+  /* Quieter than the name above it. It is the advertiser's copy, not the disclosure. */
+  font-size: 10px;
+  opacity: 0.82;
+}
 .vjs-sponsor-compact .vjs-sponsor-resume { flex: 0 0 auto; }
 /* The number alone. "Video continues in" is three words explaining a countdown that
    explains itself, and on one line they are three words of somebody's ad. */
@@ -1154,14 +1172,13 @@ body.tv-fullscreen-mode .vjs-tech {
 .video-js .vjs-ad-skip {
   position: absolute;
   right: 12px;
-  /* 🚨 MEASURED OFF THE CONTROL BAR, not off the viewport.
-     video.js gives .vjs-control-bar a height of exactly 3em in the player's own
-     font-size, so this sits just above it at every player size. A fixed 56px with a
-     `max-width: 600px` override was wrong twice over: the media query reads the
-     VIEWPORT, which inside an embed is the iframe and not the phone, and on a short
-     embed 56px is a third of the way up the picture, which is what "it sits in the
-     middle" was. */
-  bottom: calc(3em + 8px);
+  /* The corner. updateSkipControl() raises this while the control bar is actually on
+     screen and puts it back when the bar fades; this is the value until it first
+     runs. A fixed 56px with a `max-width: 600px` override was wrong twice over: the
+     media query reads the VIEWPORT, which inside an embed is the iframe and not the
+     phone, and on a short embed 56px is a third of the way up the picture. */
+  bottom: 12px;
+  transition: bottom 0.15s ease;
   /* Above .vjs-control-bar (5). It sits in the corner the bar reaches, and skipping
      an ad must not depend on the controls being faded out. */
   z-index: 6;
@@ -1201,7 +1218,7 @@ body.tv-fullscreen-mode .vjs-tech {
 .video-js .vjs-ad-skip-ready:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .video-js .vjs-banner-close, .video-js .vjs-ad-skip-ready { transition: none; }
+  .video-js .vjs-banner-close, .video-js .vjs-ad-skip-ready, .video-js .vjs-ad-skip { transition: none; }
 }
 
 @media (max-width: 600px) {

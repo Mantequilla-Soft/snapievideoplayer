@@ -1620,6 +1620,27 @@ function updateSkipControl(state) {
     ? 'Skip ad'
     : 'Skip in ' + Math.max(1, Math.ceil(Number(state.until) || 0));
   skipEl.style.display = 'inline-flex';
+
+  /* 🚨 THE CORNER, unless the controls are actually ON SCREEN.
+   *
+   * Reserving room for the control bar all the time is what put this button a third
+   * of the way up the picture: during a spot the viewer is not touching anything, so
+   * video.js fades the bar to `opacity: 0` while LEAVING it in layout at full height.
+   * Measuring it therefore reserved space under a bar nobody could see.
+   *
+   * So the button sits in the bottom-right corner, and only lifts while the bar is
+   * genuinely visible — which is also the only time it could be covered by it. Run
+   * every tick, so it follows the controls fading in and out. */
+  const bar = host.querySelector('.vjs-control-bar');
+  let lift = 12;
+  if (bar) {
+    const cs = window.getComputedStyle(bar);
+    const onScreen = cs.display !== 'none'
+      && cs.visibility !== 'hidden'
+      && parseFloat(cs.opacity || '1') > 0.05;
+    if (onScreen) lift = Math.round(bar.getBoundingClientRect().height + 8);
+  }
+  skipEl.style.bottom = lift + 'px';
 }
 
 /* Draw the banner ourselves, when the server handed us the creative instead of
