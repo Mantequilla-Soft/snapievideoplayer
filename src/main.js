@@ -1688,7 +1688,7 @@ function traceDismiss(label) {
       bufferedTo: buffEnd == null ? null : Number(buffEnd.toFixed(2)),
     });
   };
-  const events = ['waiting', 'stalled', 'seeking', 'seeked', 'playing', 'pause', 'canplay', 'canplaythrough', 'emptied', 'loadstart', 'progress'];
+  const events = ['waiting', 'stalled', 'seeking', 'seeked', 'playing', 'pause', 'canplay', 'canplaythrough', 'emptied', 'loadstart', 'loadedmetadata', 'progress'];
   const offs = events.map((e) => {
     const fn = () => note(e);
     player.on(e, fn);
@@ -1741,9 +1741,35 @@ function shadowSourceUrl() {
   } catch (_) { return null; }
 }
 
+/* Is this a device that should not be asked to decode two videos at once?
+ *
+ * 🚨 NOT window.innerWidth. This player is usually in an IFRAME, where the viewport is
+ * the size of the embed and not of the screen — a 380px player on a desktop reported
+ * 380 and was treated as a phone, so the preloaded copy was never built and every
+ * close fell through to a reload. That was silent, because a width check has nothing
+ * to report.
+ *
+ * The question is what the DEVICE can do, so ask about the device: a coarse pointer
+ * and touch points are what separate a phone from a small window on a desktop. */
+function isHandheld() {
+  try {
+    const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    const touch = (navigator.maxTouchPoints || 0) > 1;
+    const ua = /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent || '');
+    return (coarse && touch) || ua;
+  } catch (_) {
+    return false;
+  }
+}
+
 function ensureShadow() {
-  // One stream is enough on a phone. See the note above.
-  if (window.innerWidth <= 768) return;
+  // One stream is enough on a phone. See isHandheld: this is a question about the
+  // DEVICE, and a narrow embed on a desktop is not one.
+  if (isHandheld()) {
+    /* eslint-disable-next-line no-console */
+    if (!ensureShadow.saidHandheld) { ensureShadow.saidHandheld = true; console.log('[ad-dismiss] no shadow: handheld device'); }
+    return;
+  }
   const url = shadowSourceUrl();
   if (!url) {
     /* eslint-disable-next-line no-console */
