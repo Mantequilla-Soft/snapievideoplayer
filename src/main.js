@@ -1571,6 +1571,36 @@ async function dismissBanner() {
     await adBreak.dismissBanner();
 
     if (at == null) return;
+
+    /* SEAMLESS PATH: drop the buffer ahead and let VHS refill it.
+     *
+     * Reloading the source works but tears down the MediaSource, which costs about a
+     * second of black. Nothing needs tearing down: the burned segments are served
+     * `no-cache`, so a refetch reaches the server, and a dismissed session answers with
+     * a 302 to the plain original. Removing the buffered range ahead of the playhead
+     * makes VHS refetch exactly those seconds, and they come back without the banner.
+     *
+     * A margin, because a buffer emptied at the playhead stalls playback for real. The
+     * banner survives another second and a half, which nobody notices; a stall,
+     * everybody does.
+     *
+     * `sourceUpdater_` is internal, so this is guarded and falls through to the source
+     * swap when it is not there — Safari plays HLS natively and has no VHS at all. The
+     * Mac buffer cleanup above already leans on the same API, so it is not a new bet.
+     */
+    try {
+      const tech = player.tech({ IWillNotUseThisInPlugins: true });
+      const su = tech && tech.vhs && tech.vhs.sourceUpdater_;
+      if (su && typeof su.remove === 'function') {
+        const from = at + 1.5;
+        const dur = player.duration();
+        const to = isFinite(dur) && dur > from ? dur : from + 600;
+        su.remove('video', from, to);
+        su.remove('audio', from, to);
+        return;
+      }
+    } catch (_) { /* fall through to the source swap */ }
+
     const wasPlaying = player && !player.paused();
     const current = player.currentSource();
     if (!current || !current.src) return;
