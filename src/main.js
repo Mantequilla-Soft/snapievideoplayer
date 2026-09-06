@@ -570,8 +570,13 @@ function initializePlayer() {
 
         try {
           const tech = player.tech({ IWillNotUseThisInPlugins: true });
-          if (tech && tech.vhs && tech.vhs.sourceUpdater_ && currentTime > 15) {
-            const sourceUpdater = tech.vhs.sourceUpdater_;
+          // Same correction as the banner path: the source updater lives on the
+          // playlist controller, not on the handler. Read from the handler this has
+          // been a silent no-op since VHS 3.
+          const mpc = tech && tech.vhs
+            && (tech.vhs.playlistController_ || tech.vhs.masterPlaylistController_);
+          if (mpc && mpc.sourceUpdater_ && currentTime > 15) {
+            const sourceUpdater = mpc.sourceUpdater_;
             const cleanupPoint = currentTime - 10; // Keep 10 seconds behind
 
             debugLog('Mac OS: Periodic buffer cleanup', { currentTime, cleanupPoint });
@@ -1466,7 +1471,9 @@ const BANNER_MARGIN_FALLBACK_S = 15;
 function bannerRemoveMargin(tech) {
   try {
     const vhs = tech && tech.vhs;
-    const media = vhs && vhs.playlists && vhs.playlists.media && vhs.playlists.media();
+    const pc = vhs && (vhs.playlistController_ || vhs.masterPlaylistController_);
+    const playlists = (pc && pc.mainPlaylistLoader_) || (vhs && vhs.playlists);
+    const media = playlists && playlists.media && playlists.media();
     const target = Number(media && media.targetDuration) || 0;
     // What VHS has actually measured, in bits per second.
     const throughput = Number(vhs && vhs.bandwidth) || 0;
@@ -1689,7 +1696,19 @@ async function dismissBanner() {
     try {
       const tech = player.tech({ IWillNotUseThisInPlugins: true });
       const vhs = tech && tech.vhs;
-      const su = vhs && vhs.sourceUpdater_;
+      /* 🚨 The buffer lives on the PLAYLIST CONTROLLER, not on the VHS handler.
+       *
+       * `vhs.sourceUpdater_` is undefined in VHS 3.x — it is
+       * `vhs.playlistController_.sourceUpdater_`. Reading the wrong one made the guard
+       * below false every single time, so this never took the cheap path at all and
+       * silently fell through to the source reload. That is the reload you can see in
+       * the network tab, and it is why widening margins and resetting loaders changed
+       * nothing: none of that code was running.
+       *
+       * `masterPlaylistController_` is the pre-3.x name, kept so a future downgrade
+       * does not quietly reintroduce the same silence. */
+      const pc = vhs && (vhs.playlistController_ || vhs.masterPlaylistController_);
+      const su = pc && pc.sourceUpdater_;
       if (su && typeof su.remove === 'function') {
         const from = at + bannerRemoveMargin(tech);
         const dur = player.duration();
@@ -1709,7 +1728,7 @@ async function dismissBanner() {
          * lot). monitorBuffer_() then kicks a refill immediately rather than waiting
          * for the next poll, so the replacement is on its way while the playhead still
          * has its margin to play through. */
-        const loader = vhs.mainSegmentLoader_;
+        const loader = pc.mainSegmentLoader_;
         if (loader && typeof loader.resetLoader === 'function') loader.resetLoader();
         if (loader && typeof loader.monitorBuffer_ === 'function') loader.monitorBuffer_();
         return;
