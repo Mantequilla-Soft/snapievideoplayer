@@ -1574,14 +1574,35 @@ async function dismissBanner() {
     const wasPlaying = player && !player.paused();
     const current = player.currentSource();
     if (!current || !current.src) return;
-    player.src(current);
-    player.load();
+
+    const resume = () => {
+      if (!wasPlaying || !player || !player.paused()) return;
+      const p = player.play();
+      if (p && p.catch) p.catch(() => { /* the viewer can press play */ });
+    };
+
+    /* 🚨 LISTEN FIRST, then swap.
+     *
+     * These were attached after player.src(), and a source that resolves quickly fires
+     * loadedmetadata before the next statement runs — so the handler was never called,
+     * the position was never restored and playback never resumed. The listener has to
+     * exist before the thing it is listening for.
+     */
     player.one('loadedmetadata', () => {
       try {
         player.currentTime(at);
-        if (wasPlaying) { const p = player.play(); if (p && p.catch) p.catch(() => {}); }
+        /* Play AFTER the seek lands, not alongside it. play() issued while the player
+         * is still seeking is routinely interrupted, and video.js rejects the promise
+         * rather than retrying. The timeout is the backstop for a seek that never
+         * reports, which is common enough on a fresh MediaSource. */
+        player.one('seeked', resume);
+        setTimeout(resume, 900);
       } catch (_) { /* the viewer can press play */ }
     });
+
+    // src() already loads in video.js; a second load() here can fire loadedmetadata
+    // twice and re-run the seek on top of itself.
+    player.src(current);
   } catch (_) { /* the banner runs its course */ }
 }
 

@@ -1099,15 +1099,19 @@ body.tv-fullscreen-mode .vjs-tech {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  /* Big enough to hit without hunting, on a phone as well as a mouse. 22px was a
+     target you had to aim at. */
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  /* Its own dark ground: drawn over a picture we do not control. */
-  background: rgba(0, 0, 0, 0.62);
+  /* A semi-transparent disc of its own. It is drawn over a picture we do not control
+     and can assume no contrast against, and the video stays readable through it. */
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
   color: #fff;
-  font-size: 15px;
+  font-size: 21px;
   line-height: 1;
   cursor: pointer;
   opacity: 0.85;
@@ -1165,5 +1169,5 @@ body.tv-fullscreen-mode .vjs-tech {
 
 @media (max-width: 600px) {
   .vjs-ad-skip { right: 8px; bottom: 44px; padding: 5px 9px; font-size: 12px; }
-  .vjs-banner-close { width: 26px; height: 26px; font-size: 17px; opacity: 0.92; }
+  .vjs-banner-close { width: 34px; height: 34px; font-size: 22px; opacity: 0.95; }
 }
