@@ -162,6 +162,20 @@ function initializePlayer() {
   const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) || 
                 /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+  /* 🚨 WHO ACTUALLY NEEDS THE NATIVE HLS PLAYER: iOS, and nothing else.
+   *
+   * iPhone Safari has no Media Source Extensions, so VHS has nothing to attach to and
+   * the m3u8 must go to the element itself. Everywhere else MSE exists and VHS should
+   * handle the playlist — which matters here beyond preference, because a stitched
+   * playlist is something only VHS knows how to follow.
+   *
+   * iPadOS reports itself as a Mac, so the touch-point test is what separates an iPad
+   * from a desktop that happens to have a touchscreen.
+   */
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.platform)
+    || (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1);
+  const overrideNativeHls = !isIOS;
   
   // Mac OS has strict memory quotas - apply conservative buffer settings for ALL browsers on Mac
   const bufferSettings = isMac ? {
@@ -201,7 +215,18 @@ function initializePlayer() {
       hls: {
         enableLowInitialPlaylist: false,
         smoothQualityChange: true,
-        overrideNative: isSafari && !isMac,  // Only use native on Safari non-Mac (iOS)
+        /* 🚨 WAS `isSafari && !isMac`, which is false EVERYWHERE.
+         *
+         * The comment said "only use native on Safari non-Mac (iOS)" and the code did
+         * the opposite of what that needs. isMac matches iPad|iPhone|iPod, so on iOS
+         * the expression is `true && !true` — false. On Android Chrome isSafari is
+         * false, so it is false there too. With overrideNative off, VHS stands aside
+         * wherever the browser claims to play HLS natively, and Android Chrome claims
+         * exactly that while not actually doing it: canPlayType answers "maybe", the
+         * m3u8 goes to the media element, and the element reports
+         * MEDIA_ERR_SRC_NOT_SUPPORTED with networkState 3 before a byte is played.
+         * Nothing to do with ads — no HLS video played on Android Chrome at all. */
+        overrideNative: overrideNativeHls,
         ...bufferSettings,
         limitRenditionByPlayerDimensions: false,
         handleManifestRedirects: true,
@@ -210,7 +235,8 @@ function initializePlayer() {
       vhs: {
         enableLowInitialPlaylist: false,
         smoothQualityChange: true,
-        overrideNative: isSafari && !isMac,  // Only use native on Safari non-Mac (iOS)
+        // Same correction as the hls block above.
+        overrideNative: overrideNativeHls,
         ...bufferSettings,
         limitRenditionByPlayerDimensions: false,
         handleManifestRedirects: true,
