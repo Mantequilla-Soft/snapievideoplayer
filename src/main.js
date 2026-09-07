@@ -664,13 +664,28 @@ function initializePlayer() {
    * So while a spent spot is close ahead, the clock is read every frame instead.
    * Armed only within a second and a half of the cut and dropped as soon as playback
    * is past it or paused, so this is not a render-loop the player carries around. */
+  /* How far ahead of the cut to leave. Covers the gap between the frame on screen and
+   * the clock, plus the seek's own latency. */
+  const BOUNDARY_LEAD_S = 0.16;
   let boundaryRaf = 0;
   const boundaryTick = () => {
     boundaryRaf = 0;
     const start = adBreak.spotStart();
     const at = player.currentTime();
     if (start == null || !adBreak.spotConsumed || !isFinite(at) || player.paused()) return;
-    if (at >= start) { jumpSpentSpot(); return; }
+    /* 🚨 JUMP BEFORE THE CUT, not on it.
+     *
+     * Waiting until the playhead is inside the spot is already too late twice over:
+     * the frame being shown is decoded ahead of what currentTime reports, and the
+     * seek itself takes long enough that the ad frame sits on screen while it runs.
+     * Leaving early costs a sixth of a second of the creator's video at a point the
+     * viewer is about to be moved away from anyway, and it is the difference between
+     * a glimpse of somebody's ad and none. */
+    if (at >= start - BOUNDARY_LEAD_S) {
+      const to = adBreak.endOfBreak();
+      if (isFinite(to)) { try { player.currentTime(to); } catch (_) { /* it plays through */ } }
+      return;
+    }
     if (start - at > 1.5) return;
     boundaryRaf = requestAnimationFrame(boundaryTick);
   };
@@ -680,6 +695,7 @@ function initializePlayer() {
     const at = player.currentTime();
     if (start == null || !adBreak.spotConsumed || !isFinite(at) || player.paused()) return;
     if (at < start && start - at <= 1.5) boundaryRaf = requestAnimationFrame(boundaryTick);
+    else if (at < start) boundaryRaf = 0;
   };
 
   player.on('timeupdate', function() {
