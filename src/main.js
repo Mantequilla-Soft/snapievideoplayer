@@ -1692,14 +1692,17 @@ function updateBannerOverlay(show) {
      * one would have. */
     bannerOverlayEl.style.aspectRatio = String(Number(pl.aspect) || 5.6);
 
-    // The creative. A video one loops and is silent, exactly as the burned version is:
-    // a banner shares the frame with something the viewer chose, and does not get to
-    // take over their sound.
+    /* The creative. Silent, because a banner shares the frame with something the
+     * viewer chose and does not get to take over their sound.
+     *
+     * NOT looped. The burned version stopped looping when the rule became that an
+     * advertiser books a number of seconds and supplies a creative that long; a drawn
+     * one that kept restarting would have run longer than the booking it came from. */
     let media;
     if (ov.videoUrl) {
       media = document.createElement('video');
       media.muted = true;
-      media.loop = true;
+      media.loop = false;
       media.playsInline = true;
       media.autoplay = true;
       if (Hls.isSupported()) {
@@ -1899,47 +1902,6 @@ function updateBannerClick(show) {
  * and a spot booked at the start of the video is inside its own window there. Its
  * chrome would otherwise come back over a video that is merely reloading.
  */
-/* Temporary instrumentation for the close-button stall.
- *
- * Four rounds of reasoning about VHS internals have not settled why playback pauses,
- * and the console has shown nothing because nothing is throwing. So this records what
- * the media element actually DOES for ten seconds either side of a dismissal: which
- * events fire, in what order, and where the playhead and the buffer are when they do.
- *
- * Prints one table on demand. Remove once the cause is known. */
-function traceDismiss(label) {
-  const t0 = Date.now();
-  const rows = [];
-  const note = (what) => {
-    let buffEnd = null;
-    try {
-      const b = player.buffered();
-      buffEnd = b && b.length ? b.end(b.length - 1) : null;
-    } catch (_) { /* not ready */ }
-    rows.push({
-      atMs: Date.now() - t0,
-      event: what,
-      currentTime: Number(player.currentTime().toFixed(2)),
-      paused: player.paused(),
-      readyState: (player.readyState && player.readyState()) || null,
-      bufferedTo: buffEnd == null ? null : Number(buffEnd.toFixed(2)),
-    });
-  };
-  const events = ['waiting', 'stalled', 'seeking', 'seeked', 'playing', 'pause', 'canplay', 'canplaythrough', 'emptied', 'loadstart', 'loadedmetadata', 'progress'];
-  const offs = events.map((e) => {
-    const fn = () => note(e);
-    player.on(e, fn);
-    return () => player.off(e, fn);
-  });
-  note(label);
-  setTimeout(() => {
-    offs.forEach((off) => off());
-    /* eslint-disable no-console */
-    console.log('[ad-dismiss] what the player did:');
-    console.table(rows);
-    /* eslint-enable no-console */
-  }, 10000);
-}
 
 /* The shadow player: the same video WITHOUT the banner, buffered and ready.
  *
@@ -2010,14 +1972,10 @@ function ensureShadow() {
   // One stream is enough on a phone. See isHandheld: this is a question about the
   // DEVICE, and a narrow embed on a desktop is not one.
   if (isHandheld()) {
-    /* eslint-disable-next-line no-console */
-    if (!ensureShadow.saidHandheld) { ensureShadow.saidHandheld = true; console.log('[ad-dismiss] no shadow: handheld device'); }
     return;
   }
   const url = shadowSourceUrl();
   if (!url) {
-    /* eslint-disable-next-line no-console */
-    if (!ensureShadow.warned) { ensureShadow.warned = true; console.log('[ad-dismiss] no shadow: the playing source is not a session playlist'); }
     return;
   }
   if (shadowFor === url) return;
@@ -2025,13 +1983,9 @@ function ensureShadow() {
 
   const host = player && player.el && player.el();
   if (!host || !Hls.isSupported()) {
-    /* eslint-disable-next-line no-console */
-    console.log('[ad-dismiss] no shadow: hls.js unsupported here');
     return;
   }
   shadowBuilds += 1;
-  /* eslint-disable-next-line no-console */
-  console.log('[ad-dismiss] preloading the banner-free copy (build #' + shadowBuilds + '):', url);
 
   shadowEl = document.createElement('video');
   shadowEl.className = 'vjs-shadow-clean';
@@ -2084,17 +2038,6 @@ function swapToShadow(at) {
     if (shadowEl && shadowEl.buffered && shadowEl.buffered.length) {
       ahead = shadowEl.buffered.end(shadowEl.buffered.length - 1) - at;
     }
-    /* eslint-disable-next-line no-console */
-    console.log('[ad-dismiss] shadow:', {
-      builds: shadowBuilds,
-      teardowns: shadowTeardowns,
-      lastTeardownWhy,
-      claimed: shadowClaimed,
-      exists: !!shadowEl,
-      readyState: shadowEl ? shadowEl.readyState : null,
-      bufferedAheadS: ahead == null ? null : Number(ahead.toFixed(2)),
-      willSwap: !!(shadowEl && shadowEl.readyState >= 3 && ahead != null && ahead > 2),
-    });
     if (!shadowEl || shadowEl.readyState < 3 || ahead == null || ahead <= 2) return false;
 
     const wasPlaying = !player.paused();
@@ -2115,7 +2058,6 @@ function swapToShadow(at) {
 }
 
 async function dismissBanner() {
-  try { traceDismiss('x clicked'); } catch (_) { /* tracing must never break the close */ }
   /* 🚨 CLAIM THE SHADOW FIRST, and swap before awaiting anything.
    *
    * adBreak.dismissBanner() clears the banner synchronously, so a timeupdate tick
@@ -2410,7 +2352,17 @@ async function loadVideoFromData(videoData) {
        * The trade is only made where it has to be: an overlay can be hidden by a
        * filter rule, and that is accepted on the device where the alternative is an ad
        * nobody can close. */
-      bannerOverlay: isHandheld(),
+      /* ALWAYS drawn, never burned into the picture.
+       *
+       * Burning it in meant closing it needed a second, banner-free copy of the video
+       * downloaded in parallel and swapped in at the moment of the click — the shadow
+       * machinery below — and that swap was never seamless enough to feel like
+       * anything but a stutter. A drawn banner closes by hiding an element.
+       *
+       * The overlay also leaves the video bytes untouched, so the burn cache and the
+       * per-variant segment rewriting stop being on the path at all. ensureShadow()
+       * returns early on this flag, so nothing is preloaded either. */
+      bannerOverlay: true,
     });
     if (stitched) {
       primaryUrl = stitched;
