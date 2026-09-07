@@ -35,6 +35,96 @@ let heatmapBar = null; // "most replayed" seek-bar heatmap (created with the pla
 // Server-side ad insertion. Holds the mapping from the player's (stitched) timeline
 // back to content time — see src/adBreak.js for why that matters.
 const adBreak = createAdBreak();
+
+/* 🚨 THE TIMELINE SHOWS THE VIDEO, NOT THE FILE.
+ *
+ * A spot is stitched into the manifest, so the file video.js is handed is longer than
+ * the creator's video by exactly the ad, and every position past the cut sits that
+ * much further along. Drawn against the file, the bar carries a region belonging to
+ * the ad, the clock counts seconds nobody made, and the scrubber can be dropped
+ * inside the spot.
+ *
+ * The alternative — reloading a clean manifest once the ad has run — is the source
+ * swap the banner used to do, and it was never seamless. So the file is left exactly
+ * as it is and only the CONTROL is re-expressed, through the same two functions the
+ * watch-duration reporting already uses: contentTime() and its inverse.
+ *
+ * Patched on the prototypes rather than by swapping components, because these are the
+ * three questions video.js asks about position and they are asked on every frame. All
+ * of them fall through to the original whenever there is no ad in the file, so a
+ * playback without one behaves exactly as it did before.
+ */
+(function drawTimelineInContentTime() {
+  const SeekBar = videojs.getComponent('SeekBar');
+  const sb = SeekBar.prototype;
+  const wasPercent = sb.getPercent;
+  const wasCurrent = sb.getCurrentTime_;
+  const wasSeek = sb.userSeek_;
+
+  // How long the creator's video is, or null when that question does not apply.
+  const contentLen = (player) => {
+    if (!adBreak.resolved) return null;
+    const d = adBreak.contentDuration(player.duration());
+    return d > 0 ? d : null;
+  };
+
+  sb.getCurrentTime_ = function getCurrentTime_() {
+    const t = wasCurrent.call(this);
+    return adBreak.resolved ? adBreak.contentTime(t) : t;
+  };
+
+  sb.getPercent = function getPercent() {
+    const live = this.player_.liveTracker && this.player_.liveTracker.isLive();
+    // A pending seek is a scrub in progress on touch, and it is already held as a
+    // fraction of the file — dividing it by the file's length stays correct.
+    if (live || this.pendingSeekTime() !== null) return wasPercent.call(this);
+    const d = contentLen(this.player_);
+    if (!d) return wasPercent.call(this);
+    const p = this.getCurrentTime_() / d;
+    return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0;
+  };
+
+  sb.userSeek_ = function userSeek_(ct) {
+    const fileLen = this.player_.duration();
+    const d = contentLen(this.player_);
+    if (!d || !(fileLen > 0)) return wasSeek.call(this, ct);
+    /* What arrives here is `distance x player.duration()` — a position along the
+     * FILE. The bar the viewer dragged is the VIDEO, so the fraction is right and the
+     * scale is wrong: re-express it against the content, then hand back the file
+     * position that content second lives at. */
+    return wasSeek.call(this, adBreak.playerTimeFor((ct / fileLen) * d));
+  };
+
+  // The clock either side of the bar. Same three questions, same two functions.
+  const CurrentTimeDisplay = videojs.getComponent('CurrentTimeDisplay');
+  const wasCurrentContent = CurrentTimeDisplay.prototype.updateContent;
+  CurrentTimeDisplay.prototype.updateContent = function updateContent(event) {
+    if (!adBreak.resolved) return wasCurrentContent.call(this, event);
+    const t = this.player_.ended()
+      ? this.player_.duration()
+      : (this.player_.scrubbing() ? this.player_.getCache().currentTime : this.player_.currentTime());
+    return this.updateTextNode_(adBreak.contentTime(t));
+  };
+
+  const DurationDisplay = videojs.getComponent('DurationDisplay');
+  const wasDuration = DurationDisplay.prototype.updateContent;
+  DurationDisplay.prototype.updateContent = function updateContent(event) {
+    if (!adBreak.resolved) return wasDuration.call(this, event);
+    return this.updateTextNode_(adBreak.contentDuration(this.player_.duration()));
+  };
+
+  const RemainingTimeDisplay = videojs.getComponent('RemainingTimeDisplay');
+  const wasRemaining = RemainingTimeDisplay.prototype.updateContent;
+  RemainingTimeDisplay.prototype.updateContent = function updateContent(event) {
+    const d = adBreak.resolved ? adBreak.contentDuration(this.player_.duration()) : null;
+    if (!(d > 0)) return wasRemaining.call(this, event);
+    /* 🚨 A REMAINDER IS A LENGTH, NOT A POSITION. contentTime() maps positions, so
+     * running the remainder through it would be meaningless — it is the difference of
+     * two mapped positions instead. */
+    const left = this.player_.ended() ? 0 : Math.max(0, d - adBreak.contentTime(this.player_.currentTime()));
+    return this.updateTextNode_(left);
+  };
+}());
 let heatmapEnabled = true; // on by default; disable with ?heatmap=0/false/no
 let currentVideoData = null;
 let isDebugMode = false;

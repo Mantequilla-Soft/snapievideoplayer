@@ -66,6 +66,25 @@ for (let attempt = 0; attempt < 14 && seen.size < 2; attempt++) {
   ok('scrub forward into it -> lands after', ab.skipTargetFor(mid, 0), end);
   ok('playing into it -> lands after', ab.skipTargetFor(start + 0.1, start - 0.2), end);
   ok('well past it -> untouched', ab.skipTargetFor(end + 5, 0), null);
+  /* The timeline mapping. Uses the EXACT window rather than the scanned one:
+   * contentTime() collapses the whole spot onto its start, so asking it about any
+   * second inside the break hands back the true cut point, and the shift it applies
+   * after the break is the true duration. Scanning in 0.05 steps lands just past the
+   * cut and made this look like a bug the first time it ran. */
+  const cut = ab.contentTime(mid);
+  const adLen = ab.playerTimeFor(cut + 1) - (cut + 1);
+  const MEDIA = 120;
+  const contentLen = ab.contentDuration(MEDIA);
+  ok('content duration drops the ad', contentLen, MEDIA - adLen);
+  ok('before the cut maps to itself', ab.playerTimeFor(Math.max(0, cut - 1)), Math.max(0, cut - 1));
+  ok('after the cut shifts by the ad', ab.playerTimeFor(cut + 5), cut + 5 + adLen);
+  ok('the cut point stays in the ad', ab.playerTimeFor(cut), cut);
+  ok('round trip after the ad', ab.contentTime(ab.playerTimeFor(cut + 5)), cut + 5);
+  ok('round trip before the ad', ab.contentTime(ab.playerTimeFor(Math.max(0, cut - 1))), Math.max(0, cut - 1));
+  ok('no content second lands inside the ad',
+    [...Array(400)].map((_, i) => ab.playerTimeFor((i / 400) * contentLen))
+      .filter((t) => ab.spansSpot(t) && t !== cut).length, 0);
+
   if (kind === 'mid-roll') {
     ok('scrub back into it -> lands before the ad', ab.skipTargetFor(mid, end + 20), start - 0.05);
     ok('content before it -> untouched', ab.skipTargetFor(start - 0.5, 0), null);
