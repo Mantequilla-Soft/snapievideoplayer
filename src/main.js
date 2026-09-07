@@ -528,8 +528,34 @@ function initializePlayer() {
   // Consolidated timeupdate handler — single listener for buffer cleanup + postMessage
   let lastTimeUpdate = 0;
   const isInIframe = window.parent !== window;
+
+  /* 🚨 A SPOT THAT HAS RUN IS A HOLE IN THE TIMELINE.
+   *
+   * The ad is stitched into the manifest, so its seconds are real positions somebody
+   * can drag the handle onto — and scrubbing back over your own video used to play
+   * the ad again. Reloading onto a clean manifest would fix it and cost far more than
+   * it is worth: that is the source swap the banner used to do, and it was never
+   * seamless. So the seconds stay in the file and the playhead simply refuses to rest
+   * on them, jumping to whichever side the viewer was travelling towards.
+   *
+   * `lastSeen` is the position BEFORE this event, which is the only way to tell a
+   * scrub back from a scrub forward. Bound on `seeked` as well as the tick because a
+   * quarter-second of an ad the viewer has already sat through still reads as one. */
+  let lastSeen = null;
+  const jumpSpentSpot = () => {
+    const at = player.currentTime();
+    if (!isFinite(at)) return;
+    const to = adBreak.skipTargetFor(at, lastSeen);
+    if (to == null) { lastSeen = at; return; }
+    try { player.currentTime(to); } catch (_) { /* it plays through, as it used to */ }
+    lastSeen = to;
+  };
+  player.on('seeked', jumpSpentSpot);
+
   player.on('timeupdate', function() {
     const currentTime = player.currentTime();
+    adBreak.noteTime(currentTime);
+    jumpSpentSpot();
 
     // Watch-duration heartbeat — timeupdate only fires while the video is
     // genuinely advancing (not when paused), so it doubles as our "still

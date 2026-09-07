@@ -113,6 +113,14 @@ export function createAdBreak() {
   let skipAfter = null;
   // Set once the spot has been passed for good; nothing shows its chrome after that.
   let spotRetired = false;
+  /* Has this spot actually RUN?
+   *
+   * A spot that has been sat through is spent, and the seconds it occupies become a
+   * hole in the timeline rather than something to serve again to somebody scrubbing
+   * back over their own video. `entered` is what keeps that honest: dragging straight
+   * past a spot that never played does not spend it. */
+  let spotEntered = false;
+  let spotConsumed = false;
   // Seconds into the banner before its close button may appear. The server decides.
   let bannerCloseAfter = 5;
   // A banner-only playback still has a session to ask /i about, and it is the same
@@ -352,6 +360,57 @@ export function createAdBreak() {
     get spotRetired() { return spotRetired; },
 
     /**
+     * Where the spot sits on the player's clock, ignoring whether it is retired.
+     *
+     * isInside() answers "should spot chrome be on screen", which a retired spot
+     * silences. This answers "are these seconds the ad", which stays true either way
+     * and is what the seek guard has to ask.
+     */
+    spansSpot(playerTime) {
+      if (!window_ || !isFinite(playerTime)) return false;
+      return playerTime >= window_.start && playerTime < window_.start + window_.duration;
+    },
+
+    /**
+     * Told the clock on every tick, so a spot that has run can be marked spent.
+     *
+     * Entering it is not enough on its own and neither is passing its end: a viewer
+     * who drags the handle from before the spot to after it has done both without
+     * seeing a frame of it. Both, in order, is what "watched" means here.
+     */
+    noteTime(playerTime) {
+      if (!window_ || !isFinite(playerTime)) return;
+      if (this.spansSpot(playerTime)) { spotEntered = true; return; }
+      if (spotEntered && playerTime >= window_.start + window_.duration) spotConsumed = true;
+    },
+
+    /** Has the spot been watched, or skipped, and become a hole in the timeline? */
+    get spotConsumed() { return spotConsumed; },
+
+    /**
+     * Where to put the playhead when it lands in a spot that has already run.
+     *
+     * Null unless the spot is spent and the playhead is in it. Direction matters:
+     * arriving from AFTER the spot means scrubbing back, and the viewer wants the
+     * content before the ad rather than the ad again, so they are put in front of it.
+     * Every other arrival is travelling forward and goes to the far side. Playing
+     * forward off that landing point re-enters the spot and jumps it again, which is
+     * the correct reading of a hole: the ad occupies no content time at all.
+     */
+    skipTargetFor(playerTime, cameFrom) {
+      if (!spotConsumed || !this.spansSpot(playerTime)) return null;
+      const end = window_.start + window_.duration;
+      if (isFinite(cameFrom) && cameFrom >= end) {
+        const before = window_.start - 0.05;
+        /* A PRE-ROLL has nothing in front of it. Landing at 0 would be landing inside
+         * the ad again, and the guard would immediately throw the playhead forward —
+         * two seeks to reach the one place that was ever available. */
+        return before > 0 ? before : end + 0.05;
+      }
+      return end + 0.05;
+    },
+
+    /**
      * Is a banner due within the next `lead` seconds (or on screen already)?
      *
      * So the clean copy can be fetched BEFORE the banner appears. Starting it when the
@@ -401,6 +460,9 @@ export function createAdBreak() {
      * than becoming something we are tempted to make harder.
      */
     recordSkip() {
+      // Pressing Skip spends the spot as surely as watching it out does. Without this
+      // the timeline would offer it back the moment somebody scrubbed over it.
+      spotConsumed = true;
       const sid = session && session.sid;
       if (!sid) return;
       fetch(`${AD_BASE}/m/${encodeURIComponent(sid)}/skipped`, {
@@ -450,6 +512,6 @@ export function createAdBreak() {
     /** How much of the visible timeline is ad, for duration-facing UI. */
     get addedSeconds() { return window_ ? window_.duration : 0; },
 
-    reset() { session = null; window_ = null; skipAfter = null; spotRetired = false; banner = null; bannerWindow = null; bannerSid = null; premium = false; },
+    reset() { session = null; window_ = null; skipAfter = null; spotRetired = false; spotEntered = false; spotConsumed = false; banner = null; bannerWindow = null; bannerSid = null; premium = false; },
   };
 }
