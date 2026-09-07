@@ -550,6 +550,17 @@ function initializePlayer() {
     try { player.currentTime(to); } catch (_) { /* it plays through, as it used to */ }
     lastSeen = to;
   };
+  /* 🚨 'seeking', not just 'seeked'.
+   *
+   * 'seeked' fires once the media has SETTLED on the new position, by which time a
+   * frame or two of the ad has already been decoded and shown — which is the flash of
+   * ad you get from clicking into its span. 'seeking' fires the moment currentTime
+   * changes, before anything is presented, and setting currentTime again from inside
+   * it simply supersedes the seek in flight.
+   *
+   * Both are bound: 'seeking' does the work, 'seeked' is the backstop for any path
+   * that reaches a new position without announcing it first. */
+  player.on('seeking', jumpSpentSpot);
   player.on('seeked', jumpSpentSpot);
 
   player.on('timeupdate', function() {
