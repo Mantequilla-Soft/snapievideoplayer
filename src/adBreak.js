@@ -312,13 +312,6 @@ export function createAdBreak() {
       return window_;
     },
 
-    /** Seconds until the break starts, or null when that is not a useful question. */
-    secondsUntil(playerTime) {
-      if (!window_ || !isFinite(playerTime)) return null;
-      const left = window_.start - playerTime;
-      return left > 0 ? left : null;
-    },
-
     /**
      * Seconds until the content resumes, or null when not inside the break. Same
      * window the disclosure and the watch tracker use, so the number on screen can
@@ -334,8 +327,17 @@ export function createAdBreak() {
     /** Seconds until the break starts, or null when that is not a useful question. */
     secondsUntil(playerTime) {
       if (!window_ || !isFinite(playerTime)) return null;
+      /* Nothing to warn about. A spot already watched is jumped rather than played,
+       * so counting down to it announces an interruption that never arrives — and it
+       * announced it again every time somebody re-watched the run-up to the cut. */
+      if (spotConsumed) return null;
       const left = window_.start - playerTime;
       return left > 0 ? left : null;
+    },
+
+    /** Where the spot begins on the player's clock, or null. */
+    spotStart() {
+      return window_ ? window_.start : null;
     },
 
     /** Is the playhead inside the break right now? */

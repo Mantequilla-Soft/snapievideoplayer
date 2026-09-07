@@ -653,10 +653,40 @@ function initializePlayer() {
   player.on('seeking', jumpSpentSpot);
   player.on('seeked', jumpSpentSpot);
 
+  /* 🚨 WATCH THE BOUNDARY BY FRAME, not by timeupdate.
+   *
+   * A seek is announced, so it can be redirected before anything is drawn. Ordinary
+   * playback into a spent spot is not: it just arrives, and timeupdate only reports
+   * about four times a second, so up to a quarter second of an ad the viewer already
+   * sat through was presented before the jump. That is exactly what re-watching the
+   * run-up to a mid-roll showed.
+   *
+   * So while a spent spot is close ahead, the clock is read every frame instead.
+   * Armed only within a second and a half of the cut and dropped as soon as playback
+   * is past it or paused, so this is not a render-loop the player carries around. */
+  let boundaryRaf = 0;
+  const boundaryTick = () => {
+    boundaryRaf = 0;
+    const start = adBreak.spotStart();
+    const at = player.currentTime();
+    if (start == null || !adBreak.spotConsumed || !isFinite(at) || player.paused()) return;
+    if (at >= start) { jumpSpentSpot(); return; }
+    if (start - at > 1.5) return;
+    boundaryRaf = requestAnimationFrame(boundaryTick);
+  };
+  const armBoundary = () => {
+    if (boundaryRaf) return;
+    const start = adBreak.spotStart();
+    const at = player.currentTime();
+    if (start == null || !adBreak.spotConsumed || !isFinite(at) || player.paused()) return;
+    if (at < start && start - at <= 1.5) boundaryRaf = requestAnimationFrame(boundaryTick);
+  };
+
   player.on('timeupdate', function() {
     const currentTime = player.currentTime();
     adBreak.noteTime(currentTime);
     jumpSpentSpot();
+    armBoundary();
 
     // Watch-duration heartbeat — timeupdate only fires while the video is
     // genuinely advancing (not when paused), so it doubles as our "still
