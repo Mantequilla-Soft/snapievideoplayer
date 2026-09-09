@@ -67,6 +67,34 @@ const VIEWER_MIN_PCT = parseFloat(process.env.AD_VIEWER_MIN_PCT) || 75;
 const VIEWER_MAX_SECONDS = parseInt(process.env.AD_VIEWER_MAX_SECONDS, 10) || 1200;
 
 const viewerName = (v) => String(v || '').trim().toLowerCase().slice(0, 16);
+
+/* ─── incubating viewers ──────────────────────────────────────────────────
+ * Watch time for a user with no Hive account, who is working towards one.
+ *
+ * Tracked WITHOUT the ad-rewards opt-in above, deliberately: this is not a
+ * payout, it is one of the goals on their own onboarding checklist, and it is
+ * shown back to them on their profile as a progress bar. Asking a brand new
+ * user to opt into tracking before their progress will move is a worse deal
+ * than simply telling them the goal exists, which the bar does.
+ *
+ * A SEPARATE collection from ad_viewer_watch, and this matters: that ledger is
+ * read by the payout job, which pays the `viewer` name on Hive. An incubation
+ * handle is not a Hive account. Writing these rows there would mean paying an
+ * account that does not exist -- or worse, paying whoever registers that name
+ * on Hive later.
+ */
+const INCUBATION_WATCH_COLLECTION = process.env.INCUBATION_WATCH_COLLECTION || 'incubation_watch';
+// Same ceiling as the reward ledger, for the same reason: without it, looping
+// one long upload is worth more than watching the platform. It also means the
+// hour cannot come from a single video, which is the point of the goal.
+const INCUBATION_MAX_SECONDS = parseInt(process.env.INCUBATION_MAX_SECONDS, 10) || VIEWER_MAX_SECONDS;
+// A handle is claimed against the same charset as a Hive account name, because
+// it has to be free to BECOME one at graduation.
+const HANDLE_RE = /^[a-z0-9.-]{3,16}$/;
+const incubationName = (v) => {
+  const h = String(v || '').trim().toLowerCase();
+  return HANDLE_RE.test(h) ? h : null;
+};
 const HEATMAP_COLLECTION = process.env.WATCH_HEATMAP_COLLECTION || 'view-heatmaps';
 const BEAT_SECONDS = Math.max(1, parseInt(process.env.WATCH_BEAT_SECONDS, 10) || 5);
 // Number of timeline slices in the heatmap (YouTube uses 100). Fixed per video
@@ -101,6 +129,11 @@ async function ensureIndexes() {
     await sess.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL cleanup
     const heat = database.collection(HEATMAP_COLLECTION);
     await heat.createIndex({ owner: 1, permlink: 1 }, { unique: true }); // one doc per video
+    const incWatch = database.collection(INCUBATION_WATCH_COLLECTION);
+    // One row per (viewer, video) — the upsert key — and the sum the progress
+    // endpoint runs is by handle alone.
+    await incWatch.createIndex({ handle: 1, owner: 1, permlink: 1 }, { unique: true });
+    await incWatch.createIndex({ handle: 1 });
   } catch (err) {
     indexesEnsured = false;
     console.error('Failed to ensure watch-duration indexes:', err.message);
@@ -295,6 +328,10 @@ async function watchStart(req, res) {
     // single identified row is written — a client asserting somebody's name must
     // never be enough to start storing their viewing.
     const viewer = viewerName(req.body?.viewer);
+    // An incubating viewer, who has no Hive name to be the `viewer` above. Held
+    // on the session for the same reason: the credit is decided from beats we
+    // time ourselves, so the identity has to be fixed when the session opens.
+    const incViewer = incubationName(req.body?.incubationViewer);
 
     await database.collection(SESSION_COLLECTION).insertOne({
       sid,
@@ -303,6 +340,7 @@ async function watchStart(req, res) {
       type,
       source,
       viewer: viewer || null,
+      incViewer: incViewer || null,
       durationMs,
       heatmapDuration,     // seconds — stable axis for bucketing
       bucketCount,
@@ -453,6 +491,7 @@ async function watchBeat(req, res) {
     );
 
     await recordViewerReward(database, s, { watchedPct, contentSeconds });
+    await recordIncubationWatch(database, s, { contentSeconds });
 
     res.json({ watchedSeconds, contentSeconds, watchedPct, videoDuration, position: curPos });
   } catch (error) {
@@ -571,6 +610,59 @@ async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
     );
   } catch (err) {
     console.error('[viewer-reward] not recorded:', err && err.message);
+  }
+}
+
+/**
+ * Bank watch time towards an incubating user's onboarding goal.
+ *
+ * Mirrors recordViewerReward, minus the two conditions that do not apply:
+ *
+ *   no opt-in     they are opted in by virtue of being here. See the note on
+ *                 INCUBATION_WATCH_COLLECTION for why this is not the same
+ *                 decision as joining a payout ledger.
+ *   no % bar      the reward ledger asks "did they watch this video?", which
+ *                 needs a completion threshold. This asks "how long have they
+ *                 watched?", so partial views count for what they were.
+ *
+ * The conditions that DO carry over, all load-bearing:
+ *
+ *   source        3speak.tv only. An embed on someone else's site is not the
+ *                 onboarding journey and cannot identify the viewer anyway.
+ *   not the owner watching your own uploads on a loop is not watching 3Speak.
+ *   not private   private mode means "do not record this".
+ *
+ * 🚨 ONE ROW PER (handle, owner, permlink), upserted with $max, so rewatching a
+ * video can only raise its best figure and never add to it. With the per-video
+ * ceiling that makes the hour something you reach by watching the platform, not
+ * by leaving one tab open. Seconds are speed-corrected content, so 0.5x cannot
+ * stretch an hour into two and 2x is not punished.
+ *
+ * Failure is swallowed: this hangs off the end of view tracking and must never
+ * break it.
+ */
+async function recordIncubationWatch(database, s, { contentSeconds }) {
+  try {
+    const handle = incubationName(s.incViewer);
+    if (!handle) return;
+    if (s.source !== '3speak') return;
+    if (s.private) return;
+    if (handle === String(s.owner || '').toLowerCase()) return;
+
+    const seconds = Math.min(Math.max(0, Math.round(contentSeconds) || 0), INCUBATION_MAX_SECONDS);
+    if (seconds <= 0) return;
+
+    await database.collection(INCUBATION_WATCH_COLLECTION).updateOne(
+      { handle, owner: s.owner, permlink: s.permlink },
+      {
+        $max: { contentSeconds: seconds },
+        $set: { at: new Date() },
+        $setOnInsert: { firstAt: new Date() },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    console.error('[incubation-watch] not recorded:', err && err.message);
   }
 }
 
