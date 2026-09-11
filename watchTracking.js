@@ -350,6 +350,12 @@ async function watchStart(req, res) {
       userAgent,
       accumulatedMs: 0,    // wall-clock attention (real seconds spent)
       contentMs: 0,        // video content consumed (playhead advance) — speed-correct
+      // The same figure as contentMs, but only for beats sent while the tab was
+      // actually on screen. Kept SEPARATE rather than replacing contentMs: the
+      // incubation goal is the only consumer that should discount a video left
+      // playing in a background tab. View durations, the heatmap and ad viewer
+      // rewards all still measure what was played, which is what they are for.
+      visibleContentMs: 0,
       startPosition,       // where the watch began on the timeline
       lastPosition: startPosition,
       maxPosition: startPosition, // furthest point reached (drop-off / retention)
@@ -414,12 +420,18 @@ async function watchBeat(req, res) {
     const contiguousMax = Math.max((credit / 1000) * 2.5, 12);
     const incs = {};
     let contentMs = s.contentMs || 0;
+    let visibleContentMs = s.visibleContentMs || 0;
+    // Absent means visible. An older player build does not send this field, and
+    // treating its beats as background would silently stop crediting watch time
+    // for every viewer on it -- a far worse failure than counting some.
+    const beatHidden = req.body?.hidden === true || req.body?.hidden === 'true';
     const covered = new Set(Array.isArray(s.coveredBuckets) ? s.coveredBuckets : []);
     if (durSec > 0 && curPos >= lastPos && (curPos - lastPos) <= contiguousMax) {
       // Content consumed = playhead advance. This is SPEED-CORRECT: at 1.5x the
       // playhead moves 1.5x faster, so more content accrues per wall-second —
       // exactly the fix for fast playback under-counting watch progress.
       contentMs += (curPos - lastPos) * 1000;
+      if (!beatHidden) visibleContentMs += (curPos - lastPos) * 1000;
       const b0 = bucketIndex(lastPos, durSec, n);
       const b1 = bucketIndex(curPos, durSec, n);
       for (let b = b0; b <= b1; b++) {
@@ -438,7 +450,7 @@ async function watchBeat(req, res) {
       { sid },
       {
         $set: {
-          accumulatedMs, contentMs, lastBeatAt: new Date(now),
+          accumulatedMs, contentMs, visibleContentMs, lastBeatAt: new Date(now),
           lastPosition: curPos, maxPosition,
           coveredBuckets: Array.from(covered), rateSum, rateBeats,
         },
@@ -454,6 +466,7 @@ async function watchBeat(req, res) {
 
     const watchedSeconds = Math.round(accumulatedMs / 1000);       // wall-clock attention
     const contentSeconds = Math.round(contentMs / 1000);           // content consumed (speed-correct)
+    const visibleContentSeconds = Math.round(visibleContentMs / 1000); // ...of it, watched on screen
     const videoDuration = durSec;
     // % of the video actually SEEN = distinct buckets covered (speed- AND
     // replay-correct; replays don't push it past 100, a skipped middle isn't counted).
@@ -491,7 +504,7 @@ async function watchBeat(req, res) {
     );
 
     await recordViewerReward(database, s, { watchedPct, contentSeconds });
-    await recordIncubationWatch(database, s, { contentSeconds });
+    await recordIncubationWatch(database, s, { contentSeconds: visibleContentSeconds });
 
     res.json({ watchedSeconds, contentSeconds, watchedPct, videoDuration, position: curPos });
   } catch (error) {
@@ -631,6 +644,10 @@ async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
  *                 onboarding journey and cannot identify the viewer anyway.
  *   not the owner watching your own uploads on a loop is not watching 3Speak.
  *   not private   private mode means "do not record this".
+ *   on screen     the seconds handed in here are the VISIBLE ones only, so a
+ *                 video left playing in a background tab does not build the
+ *                 hour. Listening is a fine way to use 3Speak; it is just not
+ *                 evidence of the thing this goal is asking about.
  *
  * 🚨 ONE ROW PER (handle, owner, permlink), upserted with $max, so rewatching a
  * video can only raise its best figure and never add to it. With the per-video

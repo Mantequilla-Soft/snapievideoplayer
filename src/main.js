@@ -1553,7 +1553,12 @@ function watchBeat(useBeacon) {
   // watch time on the creator's video.
   const position = playerContentTime();
   const rate = (player && player.playbackRate) ? player.playbackRate() : 1;
-  const payload = JSON.stringify({ sid: W.sid, token: W.token, position, rate });
+  // Whether this beat happened with the tab on screen. timeupdate keeps firing
+  // for a video playing in a hidden tab, so without this a backgrounded stream
+  // accrues watch time exactly like a watched one. Only the incubation goal
+  // acts on it -- view durations and ad rewards still count what was played.
+  const hidden = typeof document !== 'undefined' && document.visibilityState !== 'visible';
+  const payload = JSON.stringify({ sid: W.sid, token: W.token, position, rate, hidden });
   try {
     if (useBeacon && navigator.sendBeacon) {
       navigator.sendBeacon('/api/watch/beat', new Blob([payload], { type: 'application/json' }));
