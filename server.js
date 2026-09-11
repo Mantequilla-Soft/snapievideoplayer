@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const bodyParser = require('body-parser');
+const { Readable } = require('stream');
 require('dotenv').config();
 
 const db = require('./db');
@@ -302,6 +303,26 @@ app.get('/hls', async (req, res) => {
   try {
     const base = hit.url.slice(0, hit.url.lastIndexOf('/') + 1);
     const abs = (u) => { try { return new URL(u, base).href; } catch { return u; } };
+
+    // TEMPORARY (2026-09-08) — both BunnyCDN zones are suspended, so the tier-3
+    // "reachable but browser-hostile" gateway is winning every race and hls.js gets
+    // CORS-blocked on every child of the manifest.
+    //
+    // When (and ONLY when) the winner is one of those, hand its children back through
+    // this server, which does send `Access-Control-Allow-Origin`. That costs us the
+    // segment bandwidth, which is why it is conditional rather than always-on: the
+    // moment a CORS-capable gateway answers again, children are absolutised straight
+    // to the CDN exactly as before and this path goes cold on its own. Nothing to
+    // revert when the zones come back.
+    const viaSelf = !corsOk(hit.url);
+    const childUrl = (u) => {
+      const a = abs(u);
+      if (!viaSelf || !/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(a)) return a;
+      // A nested playlist goes back through /hls so it gets the same treatment
+      // (codec fix + this rewrite) one level down; everything else is bytes.
+      return `${SELF_BASE}/${/\.m3u8(\?|$)/i.test(a) ? 'hls' : 'ipfs-proxy'}?u=${encodeURIComponent(a)}`;
+    };
+
     const fixed = hit.text.split(/\r?\n/).map((line) => {
       const t = line.trim();
       if (t.startsWith('#EXT-X-STREAM-INF')) {
@@ -309,12 +330,14 @@ app.get('/hls', async (req, res) => {
         if (m && !codecsHaveVideo(m[1])) return line.replace(/,?\s*CODECS="[^"]*"/i, '');
         return line;
       }
-      // Relative URI="..." inside a tag (e.g. #EXT-X-MEDIA) → absolute.
+      // URI="..." inside a tag (#EXT-X-MEDIA, #EXT-X-KEY, #EXT-X-MAP). Rewritten even
+      // when already absolute — an absolute ref on the losing gateway is exactly the
+      // thing the browser cannot read.
       if (t.startsWith('#')) {
-        return line.replace(/URI="([^"]+)"/i, (full, u) => (/^https?:\/\//i.test(u) ? full : `URI="${abs(u)}"`));
+        return line.replace(/URI="([^"]+)"/i, (full, u) => `URI="${childUrl(u)}"`);
       }
-      // A bare relative variant/segment reference → absolute winning-gateway URL.
-      if (t && !/^https?:\/\//i.test(t)) return abs(t);
+      // A bare variant/segment reference.
+      if (t) return childUrl(t);
       return line;
     }).join('\n');
     res.set('Content-Type', 'application/vnd.apple.mpegurl');
@@ -323,6 +346,101 @@ app.get('/hls', async (req, res) => {
   } catch (_) {
     return res.redirect(302, hit.url); // rewrite bug, but this manifest was reachable
   }
+});
+
+/**
+ * GET /ipfs-proxy?u=<encoded IPFS gateway URL>
+ *
+ * TEMPORARY (2026-09-08). Streams one IPFS object — a segment, a key, an init map —
+ * through this server so the browser never has to talk to a gateway that omits
+ * `Access-Control-Allow-Origin`. Only ever reached when /hls could not find a
+ * CORS-capable gateway (see childUrl there); a healthy CDN bypasses it entirely.
+ *
+ * Same SSRF guard as /hls: an https URL under an /ipfs/ path, nothing else. The path
+ * after /ipfs/ is gateway-independent, so if the named gateway fails we can retry the
+ * identical object elsewhere — useful right now, with two of four gateways refusing
+ * to serve at all.
+ *
+ * The body is piped, never buffered: a 2 MB segment must not become 2 MB of heap per
+ * concurrent viewer on a box that is already RAM-tight.
+ */
+const IPFS_PROXY_TYPES = {
+  ts:   'video/mp2t',
+  m4s:  'video/iso.segment',
+  mp4:  'video/mp4',
+  m3u8: 'application/vnd.apple.mpegurl',
+  vtt:  'text/vtt',
+  key:  'application/octet-stream',
+};
+
+const IPFS_PROXY_HEADER_TIMEOUT_MS = (() => {
+  const n = Number(process.env.IPFS_PROXY_HEADER_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 1000 ? n : 15000;
+})();
+
+app.get('/ipfs-proxy', async (req, res) => {
+  const upstream = String(req.query.u || '');
+  if (!/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(upstream)) {
+    return res.status(400).send('bad ipfs url');
+  }
+
+  const cidPath = upstream.replace(/^https:\/\/[^/]+\/ipfs\//i, '');
+  const seen = new Set();
+  const candidates = [];
+  for (const gwBase of [upstream.replace(/\/ipfs\/.*$/i, ''), ...HLS_GATEWAYS]) {
+    const u = `${gwBase}/ipfs/${cidPath}`;
+    if (!seen.has(u)) { seen.add(u); candidates.push(u); }
+  }
+
+  // Range matters: hls.js issues byte-range requests for #EXT-X-BYTERANGE media and
+  // the player seeks with them. Dropping it would turn a seek into a full re-download.
+  const range = req.headers.range;
+  let lastStatus = null;
+
+  for (const u of candidates) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), IPFS_PROXY_HEADER_TIMEOUT_MS);
+    try {
+      const r = await fetch(u, {
+        redirect: 'follow',
+        signal: ac.signal,
+        headers: range ? { Range: range } : undefined,
+      });
+      // Headers are in — the BODY gets as long as it needs. Aborting mid-stream on a
+      // header timeout would truncate big segments on a slow link.
+      clearTimeout(timer);
+
+      if (!r.ok && r.status !== 206) { lastStatus = r.status; continue; }
+
+      res.status(r.status);
+      for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        const v = r.headers.get(h);
+        if (v) res.set(h, v);
+      }
+      // The gateways type by file extension and get HLS wrong — a .ts segment comes
+      // back as `text/vnd.trolltech.linguist` (Qt Linguist, because of the extension).
+      // Harmless for hls.js, which reads segments as ArrayBuffer, but wrong is wrong
+      // and native playback paths do look. Correct only extensions we are sure of.
+      const known = IPFS_PROXY_TYPES[(cidPath.match(/\.([a-z0-9]+)(?:\?|$)/i) || [])[1]?.toLowerCase()];
+      if (known) res.set('content-type', known);
+      // A CID addresses immutable bytes, so this caches hard — and anything the edge
+      // or the browser keeps is bandwidth we do not pay for twice.
+      res.set('Cache-Control', 'public, max-age=31536000, immutable');
+
+      if (!r.body) return res.end();
+      const body = Readable.fromWeb(r.body);
+      // A stalled upstream or a viewer closing the tab must never take the process
+      // down — this is a single-process service.
+      body.on('error', () => { if (!res.headersSent) res.sendStatus(502); else res.destroy(); });
+      res.on('close', () => body.destroy());
+      return body.pipe(res);
+    } catch (_) {
+      clearTimeout(timer);
+      lastStatus = lastStatus ?? 'unreachable';
+    }
+  }
+
+  return res.status(502).send(`ipfs-proxy: no gateway served this object (${lastStatus ?? 'n/a'})`);
 });
 
 /**

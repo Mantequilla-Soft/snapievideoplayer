@@ -67,6 +67,34 @@ const VIEWER_MIN_PCT = parseFloat(process.env.AD_VIEWER_MIN_PCT) || 75;
 const VIEWER_MAX_SECONDS = parseInt(process.env.AD_VIEWER_MAX_SECONDS, 10) || 1200;
 
 const viewerName = (v) => String(v || '').trim().toLowerCase().slice(0, 16);
+
+/* ─── incubating viewers ──────────────────────────────────────────────────
+ * Watch time for a user with no Hive account, who is working towards one.
+ *
+ * Tracked WITHOUT the ad-rewards opt-in above, deliberately: this is not a
+ * payout, it is one of the goals on their own onboarding checklist, and it is
+ * shown back to them on their profile as a progress bar. Asking a brand new
+ * user to opt into tracking before their progress will move is a worse deal
+ * than simply telling them the goal exists, which the bar does.
+ *
+ * A SEPARATE collection from ad_viewer_watch, and this matters: that ledger is
+ * read by the payout job, which pays the `viewer` name on Hive. An incubation
+ * handle is not a Hive account. Writing these rows there would mean paying an
+ * account that does not exist -- or worse, paying whoever registers that name
+ * on Hive later.
+ */
+const INCUBATION_WATCH_COLLECTION = process.env.INCUBATION_WATCH_COLLECTION || 'incubation_watch';
+// Same ceiling as the reward ledger, for the same reason: without it, looping
+// one long upload is worth more than watching the platform. It also means the
+// hour cannot come from a single video, which is the point of the goal.
+const INCUBATION_MAX_SECONDS = parseInt(process.env.INCUBATION_MAX_SECONDS, 10) || VIEWER_MAX_SECONDS;
+// A handle is claimed against the same charset as a Hive account name, because
+// it has to be free to BECOME one at graduation.
+const HANDLE_RE = /^[a-z0-9.-]{3,16}$/;
+const incubationName = (v) => {
+  const h = String(v || '').trim().toLowerCase();
+  return HANDLE_RE.test(h) ? h : null;
+};
 const HEATMAP_COLLECTION = process.env.WATCH_HEATMAP_COLLECTION || 'view-heatmaps';
 const BEAT_SECONDS = Math.max(1, parseInt(process.env.WATCH_BEAT_SECONDS, 10) || 5);
 // Number of timeline slices in the heatmap (YouTube uses 100). Fixed per video
@@ -101,6 +129,11 @@ async function ensureIndexes() {
     await sess.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL cleanup
     const heat = database.collection(HEATMAP_COLLECTION);
     await heat.createIndex({ owner: 1, permlink: 1 }, { unique: true }); // one doc per video
+    const incWatch = database.collection(INCUBATION_WATCH_COLLECTION);
+    // One row per (viewer, video) — the upsert key — and the sum the progress
+    // endpoint runs is by handle alone.
+    await incWatch.createIndex({ handle: 1, owner: 1, permlink: 1 }, { unique: true });
+    await incWatch.createIndex({ handle: 1 });
   } catch (err) {
     indexesEnsured = false;
     console.error('Failed to ensure watch-duration indexes:', err.message);
@@ -295,6 +328,10 @@ async function watchStart(req, res) {
     // single identified row is written — a client asserting somebody's name must
     // never be enough to start storing their viewing.
     const viewer = viewerName(req.body?.viewer);
+    // An incubating viewer, who has no Hive name to be the `viewer` above. Held
+    // on the session for the same reason: the credit is decided from beats we
+    // time ourselves, so the identity has to be fixed when the session opens.
+    const incViewer = incubationName(req.body?.incubationViewer);
 
     await database.collection(SESSION_COLLECTION).insertOne({
       sid,
@@ -303,6 +340,7 @@ async function watchStart(req, res) {
       type,
       source,
       viewer: viewer || null,
+      incViewer: incViewer || null,
       durationMs,
       heatmapDuration,     // seconds — stable axis for bucketing
       bucketCount,
@@ -312,6 +350,12 @@ async function watchStart(req, res) {
       userAgent,
       accumulatedMs: 0,    // wall-clock attention (real seconds spent)
       contentMs: 0,        // video content consumed (playhead advance) — speed-correct
+      // The same figure as contentMs, but only for beats sent while the tab was
+      // actually on screen. Kept SEPARATE rather than replacing contentMs: the
+      // incubation goal is the only consumer that should discount a video left
+      // playing in a background tab. View durations, the heatmap and ad viewer
+      // rewards all still measure what was played, which is what they are for.
+      visibleContentMs: 0,
       startPosition,       // where the watch began on the timeline
       lastPosition: startPosition,
       maxPosition: startPosition, // furthest point reached (drop-off / retention)
@@ -376,12 +420,18 @@ async function watchBeat(req, res) {
     const contiguousMax = Math.max((credit / 1000) * 2.5, 12);
     const incs = {};
     let contentMs = s.contentMs || 0;
+    let visibleContentMs = s.visibleContentMs || 0;
+    // Absent means visible. An older player build does not send this field, and
+    // treating its beats as background would silently stop crediting watch time
+    // for every viewer on it -- a far worse failure than counting some.
+    const beatHidden = req.body?.hidden === true || req.body?.hidden === 'true';
     const covered = new Set(Array.isArray(s.coveredBuckets) ? s.coveredBuckets : []);
     if (durSec > 0 && curPos >= lastPos && (curPos - lastPos) <= contiguousMax) {
       // Content consumed = playhead advance. This is SPEED-CORRECT: at 1.5x the
       // playhead moves 1.5x faster, so more content accrues per wall-second —
       // exactly the fix for fast playback under-counting watch progress.
       contentMs += (curPos - lastPos) * 1000;
+      if (!beatHidden) visibleContentMs += (curPos - lastPos) * 1000;
       const b0 = bucketIndex(lastPos, durSec, n);
       const b1 = bucketIndex(curPos, durSec, n);
       for (let b = b0; b <= b1; b++) {
@@ -400,7 +450,7 @@ async function watchBeat(req, res) {
       { sid },
       {
         $set: {
-          accumulatedMs, contentMs, lastBeatAt: new Date(now),
+          accumulatedMs, contentMs, visibleContentMs, lastBeatAt: new Date(now),
           lastPosition: curPos, maxPosition,
           coveredBuckets: Array.from(covered), rateSum, rateBeats,
         },
@@ -416,6 +466,7 @@ async function watchBeat(req, res) {
 
     const watchedSeconds = Math.round(accumulatedMs / 1000);       // wall-clock attention
     const contentSeconds = Math.round(contentMs / 1000);           // content consumed (speed-correct)
+    const visibleContentSeconds = Math.round(visibleContentMs / 1000); // ...of it, watched on screen
     const videoDuration = durSec;
     // % of the video actually SEEN = distinct buckets covered (speed- AND
     // replay-correct; replays don't push it past 100, a skipped middle isn't counted).
@@ -453,6 +504,7 @@ async function watchBeat(req, res) {
     );
 
     await recordViewerReward(database, s, { watchedPct, contentSeconds });
+    await recordIncubationWatch(database, s, { contentSeconds: visibleContentSeconds });
 
     res.json({ watchedSeconds, contentSeconds, watchedPct, videoDuration, position: curPos });
   } catch (error) {
@@ -571,6 +623,63 @@ async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
     );
   } catch (err) {
     console.error('[viewer-reward] not recorded:', err && err.message);
+  }
+}
+
+/**
+ * Bank watch time towards an incubating user's onboarding goal.
+ *
+ * Mirrors recordViewerReward, minus the two conditions that do not apply:
+ *
+ *   no opt-in     they are opted in by virtue of being here. See the note on
+ *                 INCUBATION_WATCH_COLLECTION for why this is not the same
+ *                 decision as joining a payout ledger.
+ *   no % bar      the reward ledger asks "did they watch this video?", which
+ *                 needs a completion threshold. This asks "how long have they
+ *                 watched?", so partial views count for what they were.
+ *
+ * The conditions that DO carry over, all load-bearing:
+ *
+ *   source        3speak.tv only. An embed on someone else's site is not the
+ *                 onboarding journey and cannot identify the viewer anyway.
+ *   not the owner watching your own uploads on a loop is not watching 3Speak.
+ *   not private   private mode means "do not record this".
+ *   on screen     the seconds handed in here are the VISIBLE ones only, so a
+ *                 video left playing in a background tab does not build the
+ *                 hour. Listening is a fine way to use 3Speak; it is just not
+ *                 evidence of the thing this goal is asking about.
+ *
+ * 🚨 ONE ROW PER (handle, owner, permlink), upserted with $max, so rewatching a
+ * video can only raise its best figure and never add to it. With the per-video
+ * ceiling that makes the hour something you reach by watching the platform, not
+ * by leaving one tab open. Seconds are speed-corrected content, so 0.5x cannot
+ * stretch an hour into two and 2x is not punished.
+ *
+ * Failure is swallowed: this hangs off the end of view tracking and must never
+ * break it.
+ */
+async function recordIncubationWatch(database, s, { contentSeconds }) {
+  try {
+    const handle = incubationName(s.incViewer);
+    if (!handle) return;
+    if (s.source !== '3speak') return;
+    if (s.private) return;
+    if (handle === String(s.owner || '').toLowerCase()) return;
+
+    const seconds = Math.min(Math.max(0, Math.round(contentSeconds) || 0), INCUBATION_MAX_SECONDS);
+    if (seconds <= 0) return;
+
+    await database.collection(INCUBATION_WATCH_COLLECTION).updateOne(
+      { handle, owner: s.owner, permlink: s.permlink },
+      {
+        $max: { contentSeconds: seconds },
+        $set: { at: new Date() },
+        $setOnInsert: { firstAt: new Date() },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    console.error('[incubation-watch] not recorded:', err && err.message);
   }
 }
 
