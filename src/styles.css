@@ -1123,6 +1123,24 @@ body.tv-fullscreen-mode .vjs-tech {
   pointer-events: none;
 }
 
+/* The seconds BEFORE the spot, while "Ad in 3" is on screen.
+ *
+ * Dimmed rather than hidden, which is the whole difference between this and the rule
+ * above. The creator's video is still playing here, so a bar that vanished for three
+ * seconds and came back would read as the player glitching; a bar that visibly greys
+ * out reads as "not now", which is what it means. Everything else in the control bar
+ * stays: pause, volume and fullscreen are not ways past an ad.
+ *
+ * pointer-events covers the drag, the click and the scrub preview together. The
+ * keyboard is refused in the keydown capture and every other path in
+ * adBreak.lockedSeekTarget — CSS is the part the viewer can see, not the part that
+ * enforces anything. */
+.video-js.vjs-roll-imminent .vjs-progress-control {
+  pointer-events: none;
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
+}
+
 /* Close, for a burned-in banner.
  *
  * Visible, unlike the click target it sits beside. That one is deliberately invisible

@@ -658,10 +658,25 @@ function initializePlayer() {
    * scrub back from a scrub forward. Bound on `seeked` as well as the tick because a
    * quarter-second of an ad the viewer has already sat through still reads as one. */
   let lastSeen = null;
-  const jumpSpentSpot = () => {
+  /* `fromSeek` says whether the playhead was MOVED or simply arrived.
+   *
+   * 🚨 The lock must only ever refuse a seek. Playing normally into the cut walks the
+   * clock forward across window_.start like any other second, and treating that as a
+   * jump to be refused pins the playhead just short of the ad and never lets the spot
+   * start at all — the break would be unreachable and unbillable, which is the exact
+   * opposite of the point. Spent-spot jumping has no such problem (those seconds are
+   * meant to be skipped however they are reached), so it runs on every call. */
+  const jumpSpentSpot = (fromSeek) => {
     const at = player.currentTime();
     if (!isFinite(at)) return;
-    const to = adBreak.skipTargetFor(at, lastSeen);
+    /* Two rules, in order, and they never both apply: skipTargetFor moves the playhead
+     * OUT of a spot already watched, lockedSeekTarget refuses to let it leave one that
+     * has not been. The second is the backstop for every way past a break that is not
+     * the progress bar — the keyboard, a media key, a TV remote, anything a later
+     * feature adds — because they all end up setting currentTime whatever they called
+     * to get here. */
+    const to = adBreak.skipTargetFor(at, lastSeen)
+      ?? (fromSeek ? adBreak.lockedSeekTarget(at, lastSeen) : null);
     if (to == null) { lastSeen = at; return; }
     try { player.currentTime(to); } catch (_) { /* it plays through, as it used to */ }
     lastSeen = to;
@@ -676,8 +691,8 @@ function initializePlayer() {
    *
    * Both are bound: 'seeking' does the work, 'seeked' is the backstop for any path
    * that reaches a new position without announcing it first. */
-  player.on('seeking', jumpSpentSpot);
-  player.on('seeked', jumpSpentSpot);
+  player.on('seeking', () => jumpSpentSpot(true));
+  player.on('seeked', () => jumpSpentSpot(true));
 
   /* 🚨 WATCH THE BOUNDARY BY FRAME, not by timeupdate.
    *
@@ -727,7 +742,7 @@ function initializePlayer() {
   player.on('timeupdate', function() {
     const currentTime = player.currentTime();
     adBreak.noteTime(currentTime);
-    jumpSpentSpot();
+    jumpSpentSpot(false);   // arrived, not moved — see jumpSpentSpot
     armBoundary();
 
     // Watch-duration heartbeat — timeupdate only fires while the video is
@@ -754,11 +769,16 @@ function initializePlayer() {
       // painted into the creator's video while it plays normally — taking the
       // timeline away then would be removing a control from ordinary playback.
       setRollChrome(inside);
+      // From the first frame of the countdown, not from the first frame of the spot.
+      // See setImminentChrome: the bar is dimmed rather than taken away, because the
+      // creator's video is still playing underneath it.
+      setImminentChrome(!inside && adBreak.seekLocked(currentTime));
       // A mid-roll that arrives with no warning is the part viewers resent most. A
       // few seconds' notice costs the advertiser nothing and turns an interruption
       // into a beat. Never while the spot is already playing.
-      const left = inside ? null : adBreak.secondsUntil(currentTime);
-      updateAdCountdown(left != null && left <= AD_COUNTDOWN_FROM ? Math.max(1, Math.ceil(left)) : null);
+      // countdownAt() rather than the arithmetic inline: it is what arms the seek
+      // lock, so the hint appearing and the timeline locking are one event, not two.
+      updateAdCountdown(inside ? null : adBreak.countdownAt(currentTime));
       // Skip: on screen for the WHOLE spot, counting down first and pressable after.
       // A button that appears partway through is one nobody is looking for.
       updateSkipControl(inside && adBreak.skipOffered
@@ -1542,6 +1562,21 @@ function setRollChrome(inside) {
   host.classList.toggle('vjs-roll-playing', !!inside);
 }
 
+/**
+ * Player chrome in the seconds BEFORE the spot, while the countdown is on screen.
+ *
+ * Deliberately not setRollChrome: that hides the whole control bar, which is right
+ * while somebody else's video is playing and wrong here, where the creator's video is
+ * still running and the viewer should keep pause, volume and fullscreen. Only the
+ * scrubber goes, and it dims rather than disappearing — a bar that vanished for three
+ * seconds and came back would read as the player glitching.
+ */
+function setImminentChrome(locked) {
+  const host = player && player.el && player.el();
+  if (!host) return;
+  host.classList.toggle('vjs-roll-imminent', !!locked);
+}
+
 /* Below this width the disclosure collapses to a single line.
  *
  * A judgement about the PLAYER, not the device. The detailed card is fine on a
@@ -1693,8 +1728,9 @@ function updateSponsorLabel(show) {
   sponsorLabelEl.style.display = 'flex';
 }
 
-/** How many seconds of warning a viewer gets before the break. */
-const AD_COUNTDOWN_FROM = 3;
+// How many seconds of warning a viewer gets before the break: AD_COUNTDOWN_FROM,
+// imported from adBreak.js. It sizes the seek lock as well as the hint, and the two
+// have to be the same window or the warning names a second the lock then refuses.
 
 /**
  * The pre-roll warning: "Ad in 3" counting down to the break.
@@ -3157,7 +3193,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   document.addEventListener('keydown', function(event) {
     if (!adBreak.active || !player) return;
     var t = player.currentTime();
-    if (!adBreak.isInside(t)) return;              // 🚨 roll only — banners keep every key
+    // 🚨 roll AND run-up — banners keep every key. seekLocked covers the countdown as
+    // well as the spot: the arrow keys walked past a break the viewer had just been
+    // warned about, which is the one moment they have a reason to try.
+    if (!adBreak.isInside(t) && !adBreak.seekLocked(t)) return;
     if (SEEK_KEYS.indexOf(event.key) === -1) return;
     event.preventDefault();
     event.stopPropagation();
