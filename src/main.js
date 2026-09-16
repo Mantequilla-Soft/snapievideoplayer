@@ -8,6 +8,9 @@ import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
 import { createScrubPreview } from './scrubPreview';
 import { createHeatmap } from './heatmapBar';
 import { createAdBreak } from './adBreak';
+// Only for the shadow element that preloads the banner-free copy — the main player is
+// video.js/VHS and is not touched by this.
+import Hls from 'hls.js';
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {
@@ -32,6 +35,96 @@ let heatmapBar = null; // "most replayed" seek-bar heatmap (created with the pla
 // Server-side ad insertion. Holds the mapping from the player's (stitched) timeline
 // back to content time — see src/adBreak.js for why that matters.
 const adBreak = createAdBreak();
+
+/* 🚨 THE TIMELINE SHOWS THE VIDEO, NOT THE FILE.
+ *
+ * A spot is stitched into the manifest, so the file video.js is handed is longer than
+ * the creator's video by exactly the ad, and every position past the cut sits that
+ * much further along. Drawn against the file, the bar carries a region belonging to
+ * the ad, the clock counts seconds nobody made, and the scrubber can be dropped
+ * inside the spot.
+ *
+ * The alternative — reloading a clean manifest once the ad has run — is the source
+ * swap the banner used to do, and it was never seamless. So the file is left exactly
+ * as it is and only the CONTROL is re-expressed, through the same two functions the
+ * watch-duration reporting already uses: contentTime() and its inverse.
+ *
+ * Patched on the prototypes rather than by swapping components, because these are the
+ * three questions video.js asks about position and they are asked on every frame. All
+ * of them fall through to the original whenever there is no ad in the file, so a
+ * playback without one behaves exactly as it did before.
+ */
+(function drawTimelineInContentTime() {
+  const SeekBar = videojs.getComponent('SeekBar');
+  const sb = SeekBar.prototype;
+  const wasPercent = sb.getPercent;
+  const wasCurrent = sb.getCurrentTime_;
+  const wasSeek = sb.userSeek_;
+
+  // How long the creator's video is, or null when that question does not apply.
+  const contentLen = (player) => {
+    if (!adBreak.resolved) return null;
+    const d = adBreak.contentDuration(player.duration());
+    return d > 0 ? d : null;
+  };
+
+  sb.getCurrentTime_ = function getCurrentTime_() {
+    const t = wasCurrent.call(this);
+    return adBreak.resolved ? adBreak.contentTime(t) : t;
+  };
+
+  sb.getPercent = function getPercent() {
+    const live = this.player_.liveTracker && this.player_.liveTracker.isLive();
+    // A pending seek is a scrub in progress on touch, and it is already held as a
+    // fraction of the file — dividing it by the file's length stays correct.
+    if (live || this.pendingSeekTime() !== null) return wasPercent.call(this);
+    const d = contentLen(this.player_);
+    if (!d) return wasPercent.call(this);
+    const p = this.getCurrentTime_() / d;
+    return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0;
+  };
+
+  sb.userSeek_ = function userSeek_(ct) {
+    const fileLen = this.player_.duration();
+    const d = contentLen(this.player_);
+    if (!d || !(fileLen > 0)) return wasSeek.call(this, ct);
+    /* What arrives here is `distance x player.duration()` — a position along the
+     * FILE. The bar the viewer dragged is the VIDEO, so the fraction is right and the
+     * scale is wrong: re-express it against the content, then hand back the file
+     * position that content second lives at. */
+    return wasSeek.call(this, adBreak.playerTimeFor((ct / fileLen) * d));
+  };
+
+  // The clock either side of the bar. Same three questions, same two functions.
+  const CurrentTimeDisplay = videojs.getComponent('CurrentTimeDisplay');
+  const wasCurrentContent = CurrentTimeDisplay.prototype.updateContent;
+  CurrentTimeDisplay.prototype.updateContent = function updateContent(event) {
+    if (!adBreak.resolved) return wasCurrentContent.call(this, event);
+    const t = this.player_.ended()
+      ? this.player_.duration()
+      : (this.player_.scrubbing() ? this.player_.getCache().currentTime : this.player_.currentTime());
+    return this.updateTextNode_(adBreak.contentTime(t));
+  };
+
+  const DurationDisplay = videojs.getComponent('DurationDisplay');
+  const wasDuration = DurationDisplay.prototype.updateContent;
+  DurationDisplay.prototype.updateContent = function updateContent(event) {
+    if (!adBreak.resolved) return wasDuration.call(this, event);
+    return this.updateTextNode_(adBreak.contentDuration(this.player_.duration()));
+  };
+
+  const RemainingTimeDisplay = videojs.getComponent('RemainingTimeDisplay');
+  const wasRemaining = RemainingTimeDisplay.prototype.updateContent;
+  RemainingTimeDisplay.prototype.updateContent = function updateContent(event) {
+    const d = adBreak.resolved ? adBreak.contentDuration(this.player_.duration()) : null;
+    if (!(d > 0)) return wasRemaining.call(this, event);
+    /* 🚨 A REMAINDER IS A LENGTH, NOT A POSITION. contentTime() maps positions, so
+     * running the remainder through it would be meaningless — it is the difference of
+     * two mapped positions instead. */
+    const left = this.player_.ended() ? 0 : Math.max(0, d - adBreak.contentTime(this.player_.currentTime()));
+    return this.updateTextNode_(left);
+  };
+}());
 let heatmapEnabled = true; // on by default; disable with ?heatmap=0/false/no
 let currentVideoData = null;
 let isDebugMode = false;
@@ -69,9 +162,21 @@ function initializePlayer() {
   const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) || 
                 /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.platform) ||
-                /iPad|iPhone|iPod/.test(navigator.userAgent);
 
+  /* 🚨 WHO ACTUALLY NEEDS THE NATIVE HLS PLAYER: iOS, and nothing else.
+   *
+   * iPhone Safari has no Media Source Extensions, so VHS has nothing to attach to and
+   * the m3u8 must go to the element itself. Everywhere else MSE exists and VHS should
+   * handle the playlist — which matters here beyond preference, because a stitched
+   * playlist is something only VHS knows how to follow.
+   *
+   * iPadOS reports itself as a Mac, so the touch-point test is what separates an iPad
+   * from a desktop that happens to have a touchscreen.
+   */
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.platform)
+    || (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1);
+  const overrideNativeHls = !isIOS;
+  
   // Mac OS has strict memory quotas - apply conservative buffer settings for ALL browsers on Mac
   const bufferSettings = isMac ? {
     maxBufferLength: 20,              // Mac: 20 seconds (conservative)
@@ -110,7 +215,18 @@ function initializePlayer() {
       hls: {
         enableLowInitialPlaylist: false,
         smoothQualityChange: true,
-        overrideNative: !(isSafari && isIOS),  // Only use native on iOS Safari; force VHS everywhere else
+        /* 🚨 WAS `isSafari && !isMac`, which is false EVERYWHERE.
+         *
+         * The comment said "only use native on Safari non-Mac (iOS)" and the code did
+         * the opposite of what that needs. isMac matches iPad|iPhone|iPod, so on iOS
+         * the expression is `true && !true` — false. On Android Chrome isSafari is
+         * false, so it is false there too. With overrideNative off, VHS stands aside
+         * wherever the browser claims to play HLS natively, and Android Chrome claims
+         * exactly that while not actually doing it: canPlayType answers "maybe", the
+         * m3u8 goes to the media element, and the element reports
+         * MEDIA_ERR_SRC_NOT_SUPPORTED with networkState 3 before a byte is played.
+         * Nothing to do with ads — no HLS video played on Android Chrome at all. */
+        overrideNative: overrideNativeHls,
         ...bufferSettings,
         limitRenditionByPlayerDimensions: false,
         handleManifestRedirects: true,
@@ -119,7 +235,8 @@ function initializePlayer() {
       vhs: {
         enableLowInitialPlaylist: false,
         smoothQualityChange: true,
-        overrideNative: !(isSafari && isIOS),  // Only use native on iOS Safari; force VHS everywhere else
+        // Same correction as the hls block above.
+        overrideNative: overrideNativeHls,
         ...bufferSettings,
         limitRenditionByPlayerDimensions: false,
         handleManifestRedirects: true,
@@ -472,10 +589,14 @@ function initializePlayer() {
         // Mac OS: Aggressive buffer cleanup to avoid quota errors (all browsers on Mac)
         const isMac = /Mac|iPad|iPhone|iPod/.test(navigator.platform) ||
                       /Mac|iPad|iPhone|iPod/.test(navigator.userAgent);
-        if (isMac && tech.vhs.sourceUpdater_) {
+        // Same correction as the banner path: sourceUpdater_ lives on the playlist
+        // controller, not on the handler, so this has been a silent no-op too.
+        const macMpc = tech && tech.vhs
+          && (tech.vhs.playlistController_ || tech.vhs.masterPlaylistController_);
+        if (isMac && macMpc && macMpc.sourceUpdater_) {
           try {
             const currentTime = player.currentTime();
-            const sourceUpdater = tech.vhs.sourceUpdater_;
+            const sourceUpdater = macMpc.sourceUpdater_;
 
             // Remove old buffered data (keep only 10 seconds behind current time)
             if (currentTime > 10) {
@@ -523,8 +644,106 @@ function initializePlayer() {
   // Consolidated timeupdate handler — single listener for buffer cleanup + postMessage
   let lastTimeUpdate = 0;
   const isInIframe = window.parent !== window;
+
+  /* 🚨 A SPOT THAT HAS RUN IS A HOLE IN THE TIMELINE.
+   *
+   * The ad is stitched into the manifest, so its seconds are real positions somebody
+   * can drag the handle onto — and scrubbing back over your own video used to play
+   * the ad again. Reloading onto a clean manifest would fix it and cost far more than
+   * it is worth: that is the source swap the banner used to do, and it was never
+   * seamless. So the seconds stay in the file and the playhead simply refuses to rest
+   * on them, jumping to whichever side the viewer was travelling towards.
+   *
+   * `lastSeen` is the position BEFORE this event, which is the only way to tell a
+   * scrub back from a scrub forward. Bound on `seeked` as well as the tick because a
+   * quarter-second of an ad the viewer has already sat through still reads as one. */
+  let lastSeen = null;
+  /* `fromSeek` says whether the playhead was MOVED or simply arrived.
+   *
+   * 🚨 The lock must only ever refuse a seek. Playing normally into the cut walks the
+   * clock forward across window_.start like any other second, and treating that as a
+   * jump to be refused pins the playhead just short of the ad and never lets the spot
+   * start at all — the break would be unreachable and unbillable, which is the exact
+   * opposite of the point. Spent-spot jumping has no such problem (those seconds are
+   * meant to be skipped however they are reached), so it runs on every call. */
+  const jumpSpentSpot = (fromSeek) => {
+    const at = player.currentTime();
+    if (!isFinite(at)) return;
+    /* Two rules, in order, and they never both apply: skipTargetFor moves the playhead
+     * OUT of a spot already watched, lockedSeekTarget refuses to let it leave one that
+     * has not been. The second is the backstop for every way past a break that is not
+     * the progress bar — the keyboard, a media key, a TV remote, anything a later
+     * feature adds — because they all end up setting currentTime whatever they called
+     * to get here. */
+    const to = adBreak.skipTargetFor(at, lastSeen)
+      ?? (fromSeek ? adBreak.lockedSeekTarget(at, lastSeen) : null);
+    if (to == null) { lastSeen = at; return; }
+    try { player.currentTime(to); } catch (_) { /* it plays through, as it used to */ }
+    lastSeen = to;
+  };
+  /* 🚨 'seeking', not just 'seeked'.
+   *
+   * 'seeked' fires once the media has SETTLED on the new position, by which time a
+   * frame or two of the ad has already been decoded and shown — which is the flash of
+   * ad you get from clicking into its span. 'seeking' fires the moment currentTime
+   * changes, before anything is presented, and setting currentTime again from inside
+   * it simply supersedes the seek in flight.
+   *
+   * Both are bound: 'seeking' does the work, 'seeked' is the backstop for any path
+   * that reaches a new position without announcing it first. */
+  player.on('seeking', () => jumpSpentSpot(true));
+  player.on('seeked', () => jumpSpentSpot(true));
+
+  /* 🚨 WATCH THE BOUNDARY BY FRAME, not by timeupdate.
+   *
+   * A seek is announced, so it can be redirected before anything is drawn. Ordinary
+   * playback into a spent spot is not: it just arrives, and timeupdate only reports
+   * about four times a second, so up to a quarter second of an ad the viewer already
+   * sat through was presented before the jump. That is exactly what re-watching the
+   * run-up to a mid-roll showed.
+   *
+   * So while a spent spot is close ahead, the clock is read every frame instead.
+   * Armed only within a second and a half of the cut and dropped as soon as playback
+   * is past it or paused, so this is not a render-loop the player carries around. */
+  /* How far ahead of the cut to leave. Covers the gap between the frame on screen and
+   * the clock, plus the seek's own latency. */
+  const BOUNDARY_LEAD_S = 0.16;
+  let boundaryRaf = 0;
+  const boundaryTick = () => {
+    boundaryRaf = 0;
+    const start = adBreak.spotStart();
+    const at = player.currentTime();
+    if (start == null || !adBreak.spotConsumed || !isFinite(at) || player.paused()) return;
+    /* 🚨 JUMP BEFORE THE CUT, not on it.
+     *
+     * Waiting until the playhead is inside the spot is already too late twice over:
+     * the frame being shown is decoded ahead of what currentTime reports, and the
+     * seek itself takes long enough that the ad frame sits on screen while it runs.
+     * Leaving early costs a sixth of a second of the creator's video at a point the
+     * viewer is about to be moved away from anyway, and it is the difference between
+     * a glimpse of somebody's ad and none. */
+    if (at >= start - BOUNDARY_LEAD_S) {
+      const to = adBreak.endOfBreak();
+      if (isFinite(to)) { try { player.currentTime(to); } catch (_) { /* it plays through */ } }
+      return;
+    }
+    if (start - at > 1.5) return;
+    boundaryRaf = requestAnimationFrame(boundaryTick);
+  };
+  const armBoundary = () => {
+    if (boundaryRaf) return;
+    const start = adBreak.spotStart();
+    const at = player.currentTime();
+    if (start == null || !adBreak.spotConsumed || !isFinite(at) || player.paused()) return;
+    if (at < start && start - at <= 1.5) boundaryRaf = requestAnimationFrame(boundaryTick);
+    else if (at < start) boundaryRaf = 0;
+  };
+
   player.on('timeupdate', function() {
     const currentTime = player.currentTime();
+    adBreak.noteTime(currentTime);
+    jumpSpentSpot(false);   // arrived, not moved — see jumpSpentSpot
+    armBoundary();
 
     // Watch-duration heartbeat — timeupdate only fires while the video is
     // genuinely advancing (not when paused), so it doubles as our "still
@@ -550,15 +769,44 @@ function initializePlayer() {
       // painted into the creator's video while it plays normally — taking the
       // timeline away then would be removing a control from ordinary playback.
       setRollChrome(inside);
+      // From the first frame of the countdown, not from the first frame of the spot.
+      // See setImminentChrome: the bar is dimmed rather than taken away, because the
+      // creator's video is still playing underneath it.
+      setImminentChrome(!inside && adBreak.seekLocked(currentTime));
       // A mid-roll that arrives with no warning is the part viewers resent most. A
       // few seconds' notice costs the advertiser nothing and turns an interruption
       // into a beat. Never while the spot is already playing.
-      const left = inside ? null : adBreak.secondsUntil(currentTime);
-      updateAdCountdown(left != null && left <= AD_COUNTDOWN_FROM ? Math.max(1, Math.ceil(left)) : null);
+      // countdownAt() rather than the arithmetic inline: it is what arms the seek
+      // lock, so the hint appearing and the timeline locking are one event, not two.
+      updateAdCountdown(inside ? null : adBreak.countdownAt(currentTime));
+      // Skip: on screen for the WHOLE spot, counting down first and pressable after.
+      // A button that appears partway through is one nobody is looking for.
+      updateSkipControl(inside && adBreak.skipOffered
+        ? { until: adBreak.secondsUntilSkip(currentTime), ready: adBreak.canSkip(currentTime) }
+        : null);
     }
     // The banner is independent of the spot: it can run on a playback with no spot
     // at all, so it is driven on its own terms.
-    updateBannerClick(adBreak.isBannerVisible(currentTime));
+    const bannerOn = adBreak.isBannerVisible(currentTime);
+    // Exactly one of these does anything: a burned banner needs a click target over
+    // pixels that are already there, an overlay one is drawn by us.
+    updateBannerClick(bannerOn);
+    updateBannerOverlay(bannerOn);
+    // The clean copy is only worth holding while there is a banner to close. Built
+    // when one starts, torn down when it ends.
+    // ⚠️ Never tear down a shadow a dismissal has claimed. Closing the banner clears
+    // it from adBreak synchronously, so the very next tick sees no banner — and used
+    // to destroy the preloaded copy a moment before the swap could use it.
+    /* Built AHEAD of the banner, not with it.
+     *
+     * The clean copy needs a few seconds to buffer, and the close button is reachable
+     * from the banner's very first frame. Starting it at the same moment meant an early
+     * click found it unready and fell through to a refetch, which is the pause. A lead
+     * of fifteen seconds is comfortably more than it needs on any connection that can
+     * play the video at all, and costs nothing extra: it is the same stream, started
+     * sooner and still torn down the moment the banner ends. */
+    if (adBreak.bannerDueWithin(currentTime, SHADOW_LEAD_S)) ensureShadow();
+    else if (!shadowClaimed) teardownShadow('banner window passed');
 
     // Periodic buffer cleanup for Mac OS (every 5 seconds during playback)
     if (isMac) {
@@ -567,8 +815,13 @@ function initializePlayer() {
 
         try {
           const tech = player.tech({ IWillNotUseThisInPlugins: true });
-          if (tech && tech.vhs && tech.vhs.sourceUpdater_ && currentTime > 15) {
-            const sourceUpdater = tech.vhs.sourceUpdater_;
+          // Same correction as the banner path: the source updater lives on the
+          // playlist controller, not on the handler. Read from the handler this has
+          // been a silent no-op since VHS 3.
+          const mpc = tech && tech.vhs
+            && (tech.vhs.playlistController_ || tech.vhs.masterPlaylistController_);
+          if (mpc && mpc.sourceUpdater_ && currentTime > 15) {
+            const sourceUpdater = mpc.sourceUpdater_;
             const cleanupPoint = currentTime - 10; // Keep 10 seconds behind
 
             debugLog('Mac OS: Periodic buffer cleanup', { currentTime, cleanupPoint });
@@ -1309,6 +1562,40 @@ function setRollChrome(inside) {
   host.classList.toggle('vjs-roll-playing', !!inside);
 }
 
+/**
+ * Player chrome in the seconds BEFORE the spot, while the countdown is on screen.
+ *
+ * Deliberately not setRollChrome: that hides the whole control bar, which is right
+ * while somebody else's video is playing and wrong here, where the creator's video is
+ * still running and the viewer should keep pause, volume and fullscreen. Only the
+ * scrubber goes, and it dims rather than disappearing — a bar that vanished for three
+ * seconds and came back would read as the player glitching.
+ */
+function setImminentChrome(locked) {
+  const host = player && player.el && player.el();
+  if (!host) return;
+  host.classList.toggle('vjs-roll-imminent', !!locked);
+}
+
+/* Below this width the disclosure collapses to a single line.
+ *
+ * A judgement about the PLAYER, not the device. The detailed card is fine on a
+ * full-size player and covers a quarter of a small embed, and an embed can be small on
+ * any device — which is why this is measured from the player element rather than from
+ * the viewport or the user agent.
+ */
+const SPONSOR_COMPACT_PX = 480;
+
+function sponsorIsCompact() {
+  try {
+    const el = player && player.el && player.el();
+    const w = el ? el.getBoundingClientRect().width : 0;
+    return w > 0 && w < SPONSOR_COMPACT_PX;
+  } catch (_) {
+    return false;
+  }
+}
+
 function updateSponsorLabel(show) {
   if (!show) {
     if (sponsorLabelEl) sponsorLabelEl.style.display = 'none';
@@ -1345,36 +1632,64 @@ function updateSponsorLabel(show) {
       sponsorLabelEl.addEventListener('click', (e) => e.stopPropagation());
     }
 
+    /* ONE LINE, in this order: who it is from, what it is, and how long is left.
+     *
+     * It was a stacked card — a 57px logo, the advertiser's handle on its own line,
+     * the product name, the slogan under it, then the countdown — and on a small
+     * player it covered the top-left quarter of the ad it was labelling. The viewer
+     * could not see the thing being advertised, which serves nobody: not the
+     * advertiser who paid for the frame, and not the disclosure, which only has to be
+     * legible.
+     *
+     * So: a small logo, "Ad · @account", the product name, the slogan, the countdown.
+     * The slogan is the only part that can be any length, so it is the only part
+     * allowed to scroll.
+     */
+    const logo = document.createElement(brand.logoUrl ? 'img' : 'span');
+    logo.className = 'vjs-sponsor-logo';
+    if (brand.logoUrl) { logo.src = brand.logoUrl; logo.alt = ''; logo.loading = 'lazy'; }
+    sponsorLabelEl.appendChild(logo);
+
     const from = document.createElement('span');
     from.className = 'vjs-sponsor-from';
-    from.textContent = brand.account ? 'Advertisement from @' + brand.account : (info.label || 'Sponsored');
+    /* Just the disclosure word. The Hive handle was the longest thing on the row and
+     * the least useful: the logo and the product name already say whose ad this is,
+     * and every character here is a character of somebody's video covered up. */
+    from.textContent = 'Ad';
     sponsorLabelEl.appendChild(from);
 
-    if (brand.productName || brand.slogan || brand.logoUrl) {
-      const body = document.createElement('div');
-      body.className = 'vjs-sponsor-body';
+    if (brand.productName) {
+      const n = document.createElement('strong');
+      n.className = 'vjs-sponsor-name';
+      n.textContent = brand.productName;
+      sponsorLabelEl.appendChild(n);
+    }
 
-      const logo = document.createElement(brand.logoUrl ? 'img' : 'span');
-      logo.className = 'vjs-sponsor-logo';
-      if (brand.logoUrl) { logo.src = brand.logoUrl; logo.alt = ''; logo.loading = 'lazy'; }
-      body.appendChild(logo);
-
-      const text = document.createElement('div');
-      text.className = 'vjs-sponsor-text';
-      if (brand.productName) {
-        const n = document.createElement('strong');
-        n.className = 'vjs-sponsor-name';
-        n.textContent = brand.productName;
-        text.appendChild(n);
+    if (brand.slogan) {
+      /* Scrolls only when it does not fit.
+       *
+       * An advertiser writes whatever length of slogan they like, and the overlay
+       * cannot grow to match without eating the frame again. Short ones sit still,
+       * which is what most are; long ones move so they can still be read in full. The
+       * threshold is characters rather than a measured width because the measurement
+       * is not available until it is in the document, and being a little wrong here
+       * costs a scroll that was not needed rather than text nobody can read. */
+      const wrap = document.createElement('span');
+      wrap.className = 'vjs-sponsor-slogan';
+      const sl = document.createElement('span');
+      sl.className = 'vjs-sponsor-slogan-text';
+      sl.textContent = brand.slogan;
+      if (String(brand.slogan).length > SLOGAN_SCROLL_CHARS) {
+        wrap.classList.add('vjs-sponsor-slogan-scroll');
+        // Duplicated so the loop has no gap at the wrap-around.
+        const copy = sl.cloneNode(true);
+        copy.setAttribute('aria-hidden', 'true');
+        wrap.appendChild(sl);
+        wrap.appendChild(copy);
+      } else {
+        wrap.appendChild(sl);
       }
-      if (brand.slogan) {
-        const sl = document.createElement('span');
-        sl.className = 'vjs-sponsor-slogan';
-        sl.textContent = brand.slogan;
-        text.appendChild(sl);
-      }
-      body.appendChild(text);
-      sponsorLabelEl.appendChild(body);
+      sponsorLabelEl.appendChild(wrap);
     }
 
     sponsorResumeEl = document.createElement('span');
@@ -1384,21 +1699,38 @@ function updateSponsorLabel(show) {
     host.appendChild(sponsorLabelEl);
   }
 
+  // Re-evaluated every tick, not at build time: a player can be resized or taken
+  // fullscreen mid-spot, and the layout should follow it.
+  if (sponsorLabelEl) sponsorLabelEl.classList.toggle('vjs-sponsor-compact', sponsorIsCompact());
+
   // The wait, ticking in whole seconds. Held at "in a moment" rather than 0: the
   // last tick is over before the number could be read.
   const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
   const remain = adBreak.secondsRemaining(t);
   if (sponsorResumeEl) {
-    sponsorResumeEl.textContent = remain == null
-      ? ''
-      : (Math.ceil(remain) > 0 ? 'Video continues in ' + Math.ceil(remain) + 's' : 'Video continues in a moment');
+    /* Both wordings, and the LAYOUT picks one. A full-size player has room to say what
+     * the number means; a small embed has room for the number. Two spans rather than
+     * two strings, so the choice belongs to the CSS that owns the layout and cannot
+     * drift from it. */
+    const left = remain == null ? null : Math.ceil(remain);
+    sponsorResumeEl.innerHTML = '';
+    if (left != null) {
+      const lead = document.createElement('span');
+      lead.className = 'vjs-sponsor-resume-lead';
+      lead.textContent = 'Video continues in ';
+      const num = document.createElement('span');
+      num.textContent = left > 0 ? left + 's' : 'a moment';
+      sponsorResumeEl.appendChild(lead);
+      sponsorResumeEl.appendChild(num);
+    }
   }
 
   sponsorLabelEl.style.display = 'flex';
 }
 
-/** How many seconds of warning a viewer gets before the break. */
-const AD_COUNTDOWN_FROM = 3;
+// How many seconds of warning a viewer gets before the break: AD_COUNTDOWN_FROM,
+// imported from adBreak.js. It sizes the seek lock as well as the hint, and the two
+// have to be the same window or the warning names a second the lock then refuses.
 
 /**
  * The pre-roll warning: "Ad in 3" counting down to the break.
@@ -1433,12 +1765,303 @@ function updateAdCountdown(secs) {
  * where the pixels are, and only while the banner is actually on screen.
  */
 let bannerClickEl = null;
+// The close button that sits with it. Built and torn down together.
+let bannerCloseEl = null;
+/* How much playback to leave untouched when a banner is closed.
+ *
+ * 🚨 MEASURED, not guessed. We know nothing about the viewer's connection or device,
+ * and any fixed number is wrong for somebody: too small on a phone on a bad signal and
+ * it stalls, large enough for that phone and the banner outstays its welcome on fibre.
+ *
+ * The player already knows what it needs. VHS measures its own throughput, and the
+ * playlist declares the rendition's bitrate and segment length, so how long a
+ * replacement segment takes is arithmetic rather than a hunch:
+ *
+ *     seconds to fetch one segment = segment length x rendition bitrate / throughput
+ *
+ * The margin is a segment (the one being played through) plus several fetches' worth
+ * of slack, so a connection that is just barely keeping up still gets its replacement
+ * in time. Clamped at both ends: never less than a segment and a half, because
+ * anything under that cannot survive a single slow response, and never more than half
+ * a minute, because past that the banner has effectively not been closed.
+ *
+ * Falls back to a deliberately generous number when the measurements are missing. An
+ * over-long margin costs a few extra seconds of banner; a short one costs a stall,
+ * and only one of those is worth avoiding. */
+const BANNER_MARGIN_MIN_S = 9;
+const BANNER_MARGIN_MAX_S = 30;
+const BANNER_MARGIN_FALLBACK_S = 15;
+
+function bannerRemoveMargin(tech) {
+  try {
+    const vhs = tech && tech.vhs;
+    const pc = vhs && (vhs.playlistController_ || vhs.masterPlaylistController_);
+    const playlists = (pc && pc.mainPlaylistLoader_) || (vhs && vhs.playlists);
+    const media = playlists && playlists.media && playlists.media();
+    const target = Number(media && media.targetDuration) || 0;
+    // What VHS has actually measured, in bits per second.
+    const throughput = Number(vhs && vhs.bandwidth) || 0;
+    // What this rendition costs, from the playlist itself.
+    const bitrate = Number(media && media.attributes && media.attributes.BANDWIDTH) || 0;
+    if (!target || !throughput || !bitrate) return BANNER_MARGIN_FALLBACK_S;
+
+    const fetchSeconds = (target * bitrate) / throughput;
+    // One segment to play through, plus three fetches of slack. Three because a single
+    // slow response should not be able to catch us out, and the cost of being wrong in
+    // this direction is only that the banner lingers.
+    const wanted = target + (fetchSeconds * 3);
+    return Math.min(BANNER_MARGIN_MAX_S, Math.max(BANNER_MARGIN_MIN_S, wanted));
+  } catch (_) {
+    return BANNER_MARGIN_FALLBACK_S;
+  }
+}
 let bannerBuiltFor = null;
+/**
+ * The Skip control on a spot: bottom-right, above the control bar.
+ *
+ * One element with two states so it never moves under the cursor. Waiting is a plain
+ * div, not a button: a control that looks pressable and does nothing is worse than one
+ * that plainly is not ready yet.
+ *
+ * Pressing it tells the server (which counts the spot as watched, since the button only
+ * exists after the threshold) and seeks to the end of the break. The spot is spliced
+ * INTO the playlist, so moving the playhead past it is the whole of skipping.
+ */
+let skipEl = null;
+function updateSkipControl(state) {
+  if (!state) {
+    if (skipEl) skipEl.style.display = 'none';
+    return;
+  }
+  const host = player && player.el && player.el();
+  if (!host) return;
+  if (!skipEl) {
+    skipEl = document.createElement('button');
+    skipEl.type = 'button';
+    skipEl.className = 'vjs-ad-skip';
+    // Must not also reach the video surface, or the click toggles play/pause.
+    skipEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (skipEl.dataset.ready !== '1') return;
+      try { adBreak.recordSkip(); } catch (_) { /* the skip still happens */ }
+      const to = adBreak.endOfBreak();
+      if (isFinite(to)) { try { player.currentTime(to); } catch (_) { /* it plays out */ } }
+    });
+    host.appendChild(skipEl);
+  }
+  const ready = !!state.ready;
+  skipEl.dataset.ready = ready ? '1' : '0';
+  skipEl.className = 'vjs-ad-skip' + (ready ? ' vjs-ad-skip-ready' : ' vjs-ad-skip-waiting');
+  skipEl.textContent = ready
+    ? 'Skip ad'
+    : 'Skip in ' + Math.max(1, Math.ceil(Number(state.until) || 0));
+  skipEl.style.display = 'inline-flex';
+
+  /* 🚨 THE CORNER, unless the controls are actually ON SCREEN.
+   *
+   * Reserving room for the control bar all the time is what put this button a third
+   * of the way up the picture: during a spot the viewer is not touching anything, so
+   * video.js fades the bar to `opacity: 0` while LEAVING it in layout at full height.
+   * Measuring it therefore reserved space under a bar nobody could see.
+   *
+   * So the button sits in the bottom-right corner, and only lifts while the bar is
+   * genuinely visible — which is also the only time it could be covered by it. Run
+   * every tick, so it follows the controls fading in and out. */
+  const bar = host.querySelector('.vjs-control-bar');
+  let lift = 12;
+  if (bar) {
+    const cs = window.getComputedStyle(bar);
+    const onScreen = cs.display !== 'none'
+      && cs.visibility !== 'hidden'
+      && parseFloat(cs.opacity || '1') > 0.05;
+    if (onScreen) lift = Math.round(bar.getBoundingClientRect().height + 8);
+  }
+  skipEl.style.bottom = lift + 'px';
+}
+
+/* Draw the banner ourselves, when the server handed us the creative instead of
+ * burning it in. Mobile only — see the request above for why.
+ *
+ * Positioned by the SAME placement percentages the burned version uses, so the two
+ * look alike and the geometry has one definition. The disclosure is drawn here too:
+ * a burned banner carries its label in the pixels, and an overlay has to draw its
+ * own. It is not optional in either case.
+ */
+let bannerOverlayEl = null;
+let bannerOverlayFor = null;
+let bannerShownReported = false;
+let bannerShownSince = 0;
+
+function updateBannerOverlay(show) {
+  const ov = adBreak.bannerOverlay;
+  if (!show || !ov || (!ov.imageUrl && !ov.videoUrl)) {
+    if (bannerOverlayEl) bannerOverlayEl.style.display = 'none';
+    return;
+  }
+  const host = player && player.el && player.el();
+  if (!host) return;
+
+  const key = ov.imageUrl || ov.videoUrl;
+  if (!bannerOverlayEl || bannerOverlayFor !== key) {
+    if (bannerOverlayEl && bannerOverlayEl.parentNode) bannerOverlayEl.parentNode.removeChild(bannerOverlayEl);
+    bannerOverlayFor = key;
+    const info = adBreak.bannerInfo || {};
+    const pl = info.placement || {};
+
+    bannerOverlayEl = document.createElement('div');
+    bannerOverlayEl.className = 'vjs-banner-overlay';
+    bannerOverlayEl.style.width = (Number(pl.widthPct) || 60) + '%';
+    // Exactly where it was booked. The advertiser bought a position in the frame.
+    bannerOverlayEl.style.bottom = (Number(pl.bottomPct) || 6) + '%';
+    bannerOverlayEl.style.maxHeight = (Number(pl.maxHeightPct) || 15) + '%';
+    /* 🚨 AND AN ASPECT RATIO, or the box has no height at all.
+     *
+     * Width and max-height give it no size of its own, so the container collapsed to
+     * zero and the creative inside it — sized at height:100% of an auto-height parent —
+     * rendered as nothing. The close button is absolutely positioned, so it was the one
+     * thing still visible: an x floating over no banner.
+     *
+     * The burned click target has always set this, for the same reason. Same number
+     * from the same placement, so the drawn banner occupies exactly the box the burned
+     * one would have. */
+    bannerOverlayEl.style.aspectRatio = String(Number(pl.aspect) || 5.6);
+
+    /* The creative. Silent, because a banner shares the frame with something the
+     * viewer chose and does not get to take over their sound.
+     *
+     * NOT looped. The burned version stopped looping when the rule became that an
+     * advertiser books a number of seconds and supplies a creative that long; a drawn
+     * one that kept restarting would have run longer than the booking it came from. */
+    let media;
+    if (ov.videoUrl) {
+      media = document.createElement('video');
+      media.muted = true;
+      media.loop = false;
+      media.playsInline = true;
+      media.autoplay = true;
+      if (Hls.isSupported()) {
+        const h = new Hls({ maxBufferLength: 10 });
+        h.loadSource(ov.videoUrl);
+        h.attachMedia(media);
+        media.__hls = h;
+      } else {
+        media.src = ov.videoUrl;
+      }
+    } else {
+      media = document.createElement('img');
+      media.src = ov.imageUrl;
+      media.alt = '';
+    }
+    media.className = 'vjs-banner-overlay-media';
+
+    /* Re-shape the box to the creative once its real proportions are known.
+     *
+     * The server sends no aspect for a banner (placement.aspect is null), so the 5.6
+     * above is only a placeholder that gives the box a height before anything has
+     * loaded. Left at the placeholder the box is taller than the artwork inside it,
+     * and the close button then sits in the corner of the BOX — floating above the
+     * banner rather than on it, which is exactly where it looked wrong. */
+    const box = bannerOverlayEl;
+    const fitBox = (w, h) => {
+      if (w > 0 && h > 0) box.style.aspectRatio = String(w / h);
+    };
+    if (ov.videoUrl) {
+      media.addEventListener('loadedmetadata', () => fitBox(media.videoWidth, media.videoHeight));
+    } else {
+      media.addEventListener('load', () => fitBox(media.naturalWidth, media.naturalHeight));
+    }
+
+    bannerOverlayEl.appendChild(media);
+
+    // Required disclosure, in the banner's own corner so it travels with the ad.
+    const label = document.createElement('span');
+    label.className = 'vjs-banner-overlay-label';
+    label.textContent = ov.label || 'Ad';
+    bannerOverlayEl.appendChild(label);
+
+    // The whole thing is the click target when there is somewhere to go.
+    const clickUrl = (info.brand && info.brand.clickUrl) || null;
+    if (clickUrl) {
+      const a = document.createElement('a');
+      a.className = 'vjs-banner-overlay-hit';
+      a.href = clickUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.setAttribute('aria-label', 'Open ' + ((info.brand && info.brand.productName) || 'the advertiser') + "'s website in a new tab");
+      a.addEventListener('click', (e) => e.stopPropagation());
+      bannerOverlayEl.appendChild(a);
+    }
+
+    // Close. Instant here: there is nothing to re-download, only an element to hide.
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'vjs-banner-overlay-close';
+    x.setAttribute('aria-label', 'Close this ad');
+    x.textContent = '\u00d7';
+    /* Every gesture, not just click. video.js toggles playback from a tap on its own
+     * surface, and on touch that handler runs on pointerdown — so stopping the click
+     * alone still let a tap pause the video on its way past. */
+    /* 🚨 CLOSES ON THE DOWN EVENT, NOT ON `click`.
+     *
+     * The very guard that stops a tap reaching video.js — preventDefault() on
+     * touchstart and pointerdown — also suppresses the click the browser would have
+     * synthesised afterwards. So the button swallowed the tap and then never heard
+     * about it, and on a phone the x did nothing at all. Acting on the down event is
+     * what a close button wants anyway. */
+    let closed = false;
+    const closeBanner = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      if (closed) return;
+      closed = true;
+      if (bannerOverlayEl) bannerOverlayEl.style.display = 'none';
+      bannerOverlayFor = null;
+      try { adBreak.dismissBanner(); } catch (_) { /* it is already hidden */ }
+    };
+    ['pointerdown', 'touchstart', 'mousedown'].forEach((ev) => {
+      x.addEventListener(ev, closeBanner, { passive: false });
+    });
+    // Kept for the keyboard, and for anything that fires no pointer event at all.
+    x.addEventListener('click', closeBanner);
+    bannerOverlayEl.appendChild(x);
+
+    host.appendChild(bannerOverlayEl);
+    bannerShownSince = Date.now();
+    bannerShownReported = false;
+  }
+  bannerOverlayEl.style.display = 'block';
+
+  /* No measuring here any more. The overlay sits UNDER .vjs-control-bar, so the bar
+   * wins the hit test wherever they overlap and gives it back the moment the controls
+   * fade, which is the same rule the burned banner's click target has always used.
+   * Trimming the anchor as well would have made the banner unclickable in exactly the
+   * state where nothing is in front of it. */
+
+  // Same wait as the burned one, from the same server-sent threshold.
+  const nowT = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  const xEl = bannerOverlayEl.querySelector('.vjs-banner-overlay-close');
+  if (xEl) xEl.style.display = adBreak.bannerClosable(nowT) ? 'flex' : 'none';
+
+  /* Reported once, after it has actually been on screen for what was booked.
+   *
+   * The server refuses an early claim as well, so this is belt and braces rather than
+   * the only guard — but claiming honestly from here means the refusal never has to
+   * fire in normal use. */
+  const booked = Number((adBreak.bannerInfo || {}).durationSeconds) || 0;
+  if (!bannerShownReported && booked > 0 && (Date.now() - bannerShownSince) >= booked * 1000) {
+    bannerShownReported = true;
+    try { adBreak.reportBannerShown(); } catch (_) { /* an unreported impression is not a crash */ }
+  }
+}
+
 function updateBannerClick(show) {
+  // An overlay banner draws its own click target, so this one must stay out of the way.
+  if (adBreak.bannerOverlay) { if (bannerClickEl) bannerClickEl.style.display = 'none'; if (bannerCloseEl) bannerCloseEl.style.display = 'none'; return; }
   const info = adBreak.bannerInfo;
   const clickUrl = info && info.brand && info.brand.clickUrl;
   if (!show || !clickUrl) {
     if (bannerClickEl) bannerClickEl.style.display = 'none';
+    if (bannerCloseEl) bannerCloseEl.style.display = 'none';
     return;
   }
   if (!bannerClickEl || bannerBuiltFor !== clickUrl) {
@@ -1470,8 +2093,342 @@ function updateBannerClick(show) {
     bannerClickEl.style.aspectRatio = String(aspect);
     bannerClickEl.style.maxHeight = maxHeightPct + '%';
     host.appendChild(bannerClickEl);
+
+    /* Close, just above the banner's top-right corner.
+     *
+     * OUTSIDE the click target, deliberately: inside it, closing an ad would also
+     * open the ad. A sibling positioned against the same host, offset off the top of
+     * the banner box so it never covers the advertiser's artwork.
+     */
+    bannerCloseEl = document.createElement('button');
+    bannerCloseEl.type = 'button';
+    bannerCloseEl.className = 'vjs-banner-close';
+    bannerCloseEl.setAttribute('aria-label', 'Close this ad');
+    bannerCloseEl.title = 'Close this ad';
+    bannerCloseEl.textContent = '\u00d7';
+    bannerCloseEl.style.right = ((100 - widthPct) / 2) + '%';
+    bannerCloseEl.style.bottom = 'calc(' + bottomPct + '% + ' + maxHeightPct + '%)';
+    bannerCloseEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dismissBanner();
+    });
+    host.appendChild(bannerCloseEl);
   }
   bannerClickEl.style.display = 'block';
+  // The close button waits: see adBreak.bannerClosable. The click target does not —
+  // following the ad is something a viewer may do from the first frame.
+  const t = (player && isFinite(player.currentTime())) ? player.currentTime() : 0;
+  if (bannerCloseEl) bannerCloseEl.style.display = adBreak.bannerClosable(t) ? 'flex' : 'none';
+}
+
+/**
+ * Close the banner: swap the source, do not try to un-burn what is downloaded.
+ *
+ * 🚨 The covered seconds keep the SAME segment urls whether or not a banner is on
+ * them, so dropping the buffer just refetches the burned bytes and the browser serves
+ * them from its own cache. A dismissed session's playlist points those seconds at the
+ * CDN original instead, so RELOADING THE SOURCE genuinely changes which files play.
+ *
+ * The dismiss request is awaited: the playlist is only clean once the server knows, and
+ * reloading first is a race the viewer loses about half the time.
+ *
+ * A spot already passed is retired, because reloading walks the playhead through zero
+ * and a spot booked at the start of the video is inside its own window there. Its
+ * chrome would otherwise come back over a video that is merely reloading.
+ */
+
+/* The shadow player: the same video WITHOUT the banner, buffered and ready.
+ *
+ * 🚨 This is the only way closing a banner can be instant, and every other approach
+ * failed for the same reason. The banner is burned into the pixels, so removing it
+ * means replacing bytes the player already downloaded, and replacing them means
+ * downloading again — a refetch, a rebuffer, a pause. Source swaps, buffer removals
+ * and loader resets are all different ways of paying that cost.
+ *
+ * So the clean copy is fetched IN ADVANCE, while the banner is still running, into a
+ * second hidden element. When the viewer closes the ad there is nothing to fetch: the
+ * seconds they are about to watch are already decoded, and the swap is a change of
+ * which element is on screen.
+ *
+ * ⚠️ It costs a second stream for as long as it is alive, so it is alive only while a
+ * banner actually is: created when one starts and torn down when it ends. And it is
+ * DESKTOP ONLY — mobile browsers throttle or refuse a second simultaneous video, and
+ * doubling the decoder load on a phone to save a one-second pause is a bad trade in
+ * exactly the place people notice heat and battery.
+ */
+let shadowEl = null;
+let shadowFor = null;
+// Set while a dismissal is using the shadow, so the timeupdate tick leaves it alone.
+let shadowClaimed = false;
+// How far ahead of a banner to start buffering the clean copy.
+const SHADOW_LEAD_S = 15;
+// Above this, a slogan scrolls instead of being clipped. See updateSponsorLabel.
+const SLOGAN_SCROLL_CHARS = 26;
+
+function shadowSourceUrl() {
+  try {
+    const cur = player.currentSource();
+    if (!cur || !cur.src || cur.src.indexOf('/m/') === -1) return null;
+    // Same session playlist, asking the server to leave the banner out of it.
+    return cur.src + (cur.src.indexOf('?') === -1 ? '?' : '&') + 'nobanner=1';
+  } catch (_) { return null; }
+}
+
+/* Is this a device that should not be asked to decode two videos at once?
+ *
+ * 🚨 NOT window.innerWidth. This player is usually in an IFRAME, where the viewport is
+ * the size of the embed and not of the screen — a 380px player on a desktop reported
+ * 380 and was treated as a phone, so the preloaded copy was never built and every
+ * close fell through to a reload. That was silent, because a width check has nothing
+ * to report.
+ *
+ * The question is what the DEVICE can do, so ask about the device: a coarse pointer
+ * and touch points are what separate a phone from a small window on a desktop. */
+function isHandheld() {
+  try {
+    const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    const touch = (navigator.maxTouchPoints || 0) > 1;
+    const ua = /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent || '');
+    return (coarse && touch) || ua;
+  } catch (_) {
+    return false;
+  }
+}
+
+function ensureShadow() {
+  /* Nothing to preload when the banner is DRAWN rather than burned.
+   *
+   * The shadow's only job is to have clean video ready for the moment a burned banner
+   * is closed. An overlay leaves the video untouched, so on a handheld this would be
+   * double bandwidth and double decode for a swap that never happens — which is
+   * exactly the load a phone should not be carrying. */
+  if (adBreak.bannerOverlay) return;
+  // One stream is enough on a phone. See isHandheld: this is a question about the
+  // DEVICE, and a narrow embed on a desktop is not one.
+  if (isHandheld()) {
+    return;
+  }
+  const url = shadowSourceUrl();
+  if (!url) {
+    return;
+  }
+  if (shadowFor === url) return;
+  teardownShadow('source url changed to ' + url);
+
+  const host = player && player.el && player.el();
+  if (!host || !Hls.isSupported()) {
+    return;
+  }
+  shadowBuilds += 1;
+
+  shadowEl = document.createElement('video');
+  shadowEl.className = 'vjs-shadow-clean';
+  shadowEl.muted = true;            // it is only here to buffer; the main element has the audio
+  shadowEl.playsInline = true;
+  shadowEl.preload = 'auto';
+  host.appendChild(shadowEl);
+  shadowFor = url;
+
+  try {
+    const hls = new Hls({ maxBufferLength: 30 });
+    shadowEl.__hls = hls;
+    hls.loadSource(url);
+    hls.attachMedia(shadowEl);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      try {
+        // Follow the main element, so the clean copy buffers the seconds that are
+        // about to be watched rather than the start of the video.
+        shadowEl.currentTime = player.currentTime();
+        shadowEl.play().catch(() => {});
+      } catch (_) { /* it will be caught up at swap time */ }
+    });
+  } catch (_) { teardownShadow('hls threw while starting'); }
+}
+
+let shadowBuilds = 0;
+let shadowTeardowns = 0;
+let lastTeardownWhy = null;
+function teardownShadow(why) {
+  if (shadowEl) { shadowTeardowns += 1; lastTeardownWhy = why || 'unspecified'; }
+  try { if (shadowEl && shadowEl.__hls) shadowEl.__hls.destroy(); } catch (_) { /* gone */ }
+  if (shadowEl && shadowEl.parentNode) shadowEl.parentNode.removeChild(shadowEl);
+  shadowEl = null;
+  shadowFor = null;
+}
+
+/**
+ * Switch to the preloaded banner-free copy, if it is ready. Returns whether it was.
+ *
+ * Nothing is fetched and nothing is discarded: the shadow has been decoding the same
+ * seconds without the banner for as long as the banner has been on screen, so this is
+ * a change of which element is visible and audible.
+ *
+ * Refuses unless the shadow has actually buffered past the playhead. One still catching
+ * up would stall exactly like a refetch, which is the bug this exists to avoid.
+ */
+function swapToShadow(at) {
+  try {
+    let ahead = null;
+    if (shadowEl && shadowEl.buffered && shadowEl.buffered.length) {
+      ahead = shadowEl.buffered.end(shadowEl.buffered.length - 1) - at;
+    }
+    if (!shadowEl || shadowEl.readyState < 3 || ahead == null || ahead <= 2) return false;
+
+    const wasPlaying = !player.paused();
+    shadowEl.currentTime = at;
+    shadowEl.muted = player.muted();
+    shadowEl.volume = player.volume();
+    shadowEl.classList.add('vjs-shadow-live');
+    try { player.pause(); } catch (_) { /* already still */ }
+    try { player.el().classList.add('vjs-hidden-under-shadow'); } catch (_) { /* cosmetic */ }
+    if (wasPlaying) { const pp = shadowEl.play(); if (pp && pp.catch) pp.catch(() => {}); }
+    // It is the element being watched now, so it must never be torn down as "the
+    // shadow" again.
+    shadowFor = null;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function dismissBanner() {
+  /* 🚨 CLAIM THE SHADOW FIRST, and swap before awaiting anything.
+   *
+   * adBreak.dismissBanner() clears the banner synchronously, so a timeupdate tick
+   * during the await saw no banner and destroyed the preloaded copy — the swap then
+   * found `exists: false` and fell through to a refetch. That is why fetches kept
+   * appearing on the click however the fast path was written.
+   *
+   * The swap does not need the server anyway. The shadow is already playing clean
+   * content, so switching to it is complete on its own; telling the checker to stop
+   * burning is bookkeeping for segments this playback will now never ask for. */
+  shadowClaimed = true;
+  if (bannerClickEl) bannerClickEl.style.display = 'none';
+  if (bannerCloseEl) bannerCloseEl.style.display = 'none';
+  try {
+    const at = player && isFinite(player.currentTime()) ? player.currentTime() : null;
+    const end = adBreak.endOfBreak();
+    if (isFinite(end) && at != null && end <= at) adBreak.retireSpot();
+
+    /* Swap FIRST, tell the server after.
+     *
+     * The shadow is already playing clean content, so the switch is complete without
+     * the server hearing about it. Awaiting the request before swapping is what let a
+     * timeupdate tick run in between and tear the shadow down; it also put a network
+     * round trip in front of a click that should feel instant.
+     *
+     * The request still goes, unawaited, so segments this playback never reaches are
+     * not burned and the dismissal is recorded against the impression. */
+    if (swapToShadow(at)) {
+      try { adBreak.dismissBanner(); } catch (_) { /* the swap already happened */ }
+      return;
+    }
+
+    await adBreak.dismissBanner();
+
+    if (at == null) return;
+
+    /* FALLBACK: drop the buffer ahead and let VHS refill it.
+     *
+     * Reloading the source works but tears down the MediaSource, which costs about a
+     * second of black. Nothing needs tearing down: the burned segments are served
+     * `no-cache`, so a refetch reaches the server, and a dismissed session answers with
+     * a 302 to the plain original. Removing the buffered range ahead of the playhead
+     * makes VHS refetch exactly those seconds, and they come back without the banner.
+     *
+     * ⚠️ THE MARGIN IS THE WHOLE TRICK, and it has to be bigger than it looks.
+     *
+     * It buys the time VHS needs to fetch a replacement segment before the playhead
+     * reaches the hole. At a second and a half it did not: a segment is about six
+     * seconds and the round trip plus download regularly outruns that, so playback
+     * caught up with the gap and stalled — the exact pause the buffer path exists to
+     * avoid.
+     *
+     * A whole segment of runway is the honest number. The cost is that the banner
+     * stays a few seconds longer, which is easy to accept because the CONTROLS vanish
+     * on the click: the viewer gets their acknowledgement immediately and the picture
+     * catches up. A stall is the thing they would actually notice.
+     *
+     * `sourceUpdater_` is internal, so this is guarded and falls through to the source
+     * swap when it is not there — Safari plays HLS natively and has no VHS at all. The
+     * Mac buffer cleanup above already leans on the same API, so it is not a new bet.
+     */
+    try {
+      const tech = player.tech({ IWillNotUseThisInPlugins: true });
+      const vhs = tech && tech.vhs;
+      /* 🚨 The buffer lives on the PLAYLIST CONTROLLER, not on the VHS handler.
+       *
+       * `vhs.sourceUpdater_` is undefined in VHS 3.x — it is
+       * `vhs.playlistController_.sourceUpdater_`. Reading the wrong one made the guard
+       * below false every single time, so this never took the cheap path at all and
+       * silently fell through to the source reload. That is the reload you can see in
+       * the network tab, and it is why widening margins and resetting loaders changed
+       * nothing: none of that code was running.
+       *
+       * `masterPlaylistController_` is the pre-3.x name, kept so a future downgrade
+       * does not quietly reintroduce the same silence. */
+      const pc = vhs && (vhs.playlistController_ || vhs.masterPlaylistController_);
+      const su = pc && pc.sourceUpdater_;
+      if (su && typeof su.remove === 'function') {
+        const from = at + bannerRemoveMargin(tech);
+        const dur = player.duration();
+        const to = isFinite(dur) && dur > from ? dur : from + 600;
+        su.remove('video', from, to);
+        su.remove('audio', from, to);
+
+        /* 🚨 REMOVING IS NOT ENOUGH. VHS has to be told it no longer has them.
+         *
+         * The loader tracks which segments it has APPENDED, not what is currently in
+         * the buffer, so after a remove it still believes that range is done and never
+         * refetches it. Playback simply runs into the hole and stalls — which is why
+         * widening the margin only moved the pause later instead of preventing it.
+         *
+         * resetLoader() clears that bookkeeping (and, unlike resetEverything(), leaves
+         * the buffer alone — that one removes from 0 to Infinity and rebuffers the
+         * lot). monitorBuffer_() then kicks a refill immediately rather than waiting
+         * for the next poll, so the replacement is on its way while the playhead still
+         * has its margin to play through. */
+        const loader = pc.mainSegmentLoader_;
+        if (loader && typeof loader.resetLoader === 'function') loader.resetLoader();
+        if (loader && typeof loader.monitorBuffer_ === 'function') loader.monitorBuffer_();
+        return;
+      }
+    } catch (_) { /* fall through to the source swap */ }
+
+    const wasPlaying = player && !player.paused();
+    const current = player.currentSource();
+    if (!current || !current.src) return;
+
+    const resume = () => {
+      if (!wasPlaying || !player || !player.paused()) return;
+      const p = player.play();
+      if (p && p.catch) p.catch(() => { /* the viewer can press play */ });
+    };
+
+    /* 🚨 LISTEN FIRST, then swap.
+     *
+     * These were attached after player.src(), and a source that resolves quickly fires
+     * loadedmetadata before the next statement runs — so the handler was never called,
+     * the position was never restored and playback never resumed. The listener has to
+     * exist before the thing it is listening for.
+     */
+    player.one('loadedmetadata', () => {
+      try {
+        player.currentTime(at);
+        /* Play AFTER the seek lands, not alongside it. play() issued while the player
+         * is still seeking is routinely interrupted, and video.js rejects the promise
+         * rather than retrying. The timeout is the backstop for a seek that never
+         * reports, which is common enough on a fresh MediaSource. */
+        player.one('seeked', resume);
+        setTimeout(resume, 900);
+      } catch (_) { /* the viewer can press play */ }
+    });
+
+    // src() already loads in video.js; a second load() here can fire loadedmetadata
+    // twice and re-run the seek on top of itself.
+    player.src(current);
+  } catch (_) { /* the banner runs its course */ }
 }
 
 /**
@@ -1621,6 +2578,31 @@ async function loadVideoFromData(videoData) {
       permlink: videoData.permlink,
       viewer: viewerAccount(),
       manifestUrl: videoData.videoUrl,
+      /* Burned on desktop, drawn in the page on a handheld.
+       *
+       * Burning is unblockable, which is the whole reason it exists, and desktop can
+       * afford it: the clean copy is preloaded alongside so closing the banner is a
+       * swap between two decoded streams rather than a refetch.
+       *
+       * A phone cannot. Removing burned pixels means replacing bytes already
+       * downloaded, the only way to do that without a pause is a second video stream,
+       * and mobile browsers will not reliably give us one. So there the creative is
+       * handed over and drawn, where closing it is hiding an element.
+       *
+       * The trade is only made where it has to be: an overlay can be hidden by a
+       * filter rule, and that is accepted on the device where the alternative is an ad
+       * nobody can close. */
+      /* ALWAYS drawn, never burned into the picture.
+       *
+       * Burning it in meant closing it needed a second, banner-free copy of the video
+       * downloaded in parallel and swapped in at the moment of the click — the shadow
+       * machinery below — and that swap was never seamless enough to feel like
+       * anything but a stutter. A drawn banner closes by hiding an element.
+       *
+       * The overlay also leaves the video bytes untouched, so the burn cache and the
+       * per-variant segment rewriting stop being on the path at all. ensureShadow()
+       * returns early on this flag, so nothing is preloaded either. */
+      bannerOverlay: true,
     });
     if (stitched) {
       primaryUrl = stitched;
@@ -2216,7 +3198,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   document.addEventListener('keydown', function(event) {
     if (!adBreak.active || !player) return;
     var t = player.currentTime();
-    if (!adBreak.isInside(t)) return;              // 🚨 roll only — banners keep every key
+    // 🚨 roll AND run-up — banners keep every key. seekLocked covers the countdown as
+    // well as the spot: the arrow keys walked past a break the viewer had just been
+    // warned about, which is the one moment they have a reason to try.
+    if (!adBreak.isInside(t) && !adBreak.seekLocked(t)) return;
     if (SEEK_KEYS.indexOf(event.key) === -1) return;
     event.preventDefault();
     event.stopPropagation();

@@ -103,7 +103,7 @@ h3 {
 }
 
 .video-js {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 /* Ensure poster/thumbnail displays properly */
@@ -576,7 +576,7 @@ body.layout-desktop .vjs-control-bar {
   }
   
   .codec-error-content h3 {
-    font-size: 22px;
+    font-size: 16px;
   }
   
   .codec-error-content > p {
@@ -935,6 +935,18 @@ body.tv-fullscreen-mode .vjs-tech {
   pointer-events: none;
 }
 
+/* 🚨 THE CONTROLS OUTRANK THE BANNER.
+ *
+ * video.js gives .vjs-control-bar no z-index at all, so any positioned sibling won
+ * the stack against it. The burned banner's click target sits low in the frame by
+ * design, overlapped the progress bar, and swallowed the touch: scrubbing to the
+ * banner's position opened the advertiser's link instead of seeking.
+ *
+ * Safe to put the bar on top, because video.js already sets `pointer-events: none`
+ * on it while the controls are faded out, so the banner stays clickable exactly when
+ * the controls are not in the way. The ad's OWN controls sit above it in turn. */
+.video-js .vjs-control-bar { z-index: 5; }
+
 /* Click target over the burned-in banner. Nothing to draw: the pixels are already
    in the video, this is only somewhere to click. Sized from the server's placement
    percentages, so it tracks the banner through resize and fullscreen. */
@@ -953,123 +965,151 @@ body.tv-fullscreen-mode .vjs-tech {
   .vjs-ad-countdown { top: 8px; right: 8px; font-size: 11px; padding: 3px 8px; }
 }
 
+/* The sponsor disclosure.
+ *
+ * TWO LAYOUTS, chosen by the PLAYER's width, not the device's. A full-size player has
+ * room for the advertiser's logo, name and slogan laid out properly, and that is the
+ * default. Below SPONSOR_COMPACT_PX it collapses to a single line, because on a small
+ * embed the detailed card covered a quarter of the frame and the viewer could not see
+ * the ad it was labelling. An embed can be small on a desktop, which is exactly why
+ * this is not a mobile media query.
+ */
 .vjs-sponsor-note {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  /* `right` as well as `left`: with only `left` this box is shrink-to-fit, and a
-     max-width on it does not constrain a wider child — the overlay overflows and
-     the text ends up squeezed into ellipses. Bounding both sides gives it a real
-     width the overlay fills and never exceeds. */
-  right: 12px;
-  max-width: min(340px, 62%);
-  z-index: 3;
-  display: none;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px 10px;
+  top: 10px;
+  left: 10px;
+  z-index: 7;
+  pointer-events: none;
+
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: min(260px, 48%);
+  padding: 7px 11px 8px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(6px);
   color: #fff;
-  font: 400 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  text-decoration: none;
-  pointer-events: none;
-}
-
-/* Only clickable when there is somewhere to go. */
-.vjs-sponsor-note.vjs-sponsor-link {
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-.vjs-sponsor-note.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.75); }
-
-.vjs-sponsor-from {
   font-size: 11px;
-  line-height: 1.3;
-  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.35;
+  text-decoration: none;
 }
 
-.vjs-sponsor-body {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
+.vjs-sponsor-link { pointer-events: auto; cursor: pointer; }
+.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.75); }
 
 .vjs-sponsor-logo {
-  flex: none;
-  width: 57px;
-  height: 57px;
-  border-radius: 50%;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
   object-fit: cover;
-  background: rgba(255, 255, 255, 0.12);
-  display: block;
+  background: rgba(255, 255, 255, 0.14);
 }
 
-.vjs-sponsor-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+/* The disclosure itself: never shrinks, never scrolls, never abbreviated away. It is
+   the one part that legally has to be readable. */
+.vjs-sponsor-from {
+  flex: 1 0 100%;
+  order: -1;
+  opacity: 0.85;
+  font-size: 10px;
+  letter-spacing: 0.01em;
 }
 
 .vjs-sponsor-name {
-  font-size: 14px;
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 700;
-  line-height: 1.25;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .vjs-sponsor-slogan {
-  font-size: 12px;
-  line-height: 1.3;
-  color: rgba(255, 255, 255, 0.82);
-  /* Two lines, hard: a long slogan must not grow the overlay over the video. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
+  flex: 1 0 100%;
+  min-width: 0;
   overflow: hidden;
+  opacity: 0.9;
+  white-space: nowrap;
 }
+.vjs-sponsor-slogan-text { display: inline-block; }
 
 .vjs-sponsor-resume {
-  font-size: 11.5px;
-  line-height: 1.3;
-  color: rgba(255, 255, 255, 0.72);
+  flex: 1 0 100%;
+  opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
 
-.vjs-sponsor-resume:empty { display: none; }
+/* ── Compact: one line, for a player too small to give a card away to ───────── */
+/* TWO ROWS: who it is on the first, what they say on the second.
+ *
+ * One line meant the slogan competed with the advertiser's own name for the width
+ * that was left, and on a phone both lost — the name was clipped and the slogan was
+ * a moving sliver. The identity and the countdown are short and fixed, so they keep
+ * the first row; the slogan is the only part of any length, so it gets a row of its
+ * own to scroll along. */
+.vjs-sponsor-note.vjs-sponsor-compact {
+  /* Tucked into the corner and wound in as tight as it goes. The video is the thing
+     the viewer came for, so the disclosure takes the smallest box that stays legible:
+     one type size throughout, a hairline of padding, and lines that sit close. */
+  top: 6px;
+  left: 6px;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  max-width: calc(100% - 12px);
+  padding: 3px 8px 4px 3px;
+  border-radius: 10px;
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.vjs-sponsor-compact .vjs-sponsor-logo { width: 15px; height: 15px; border-radius: 50%; }
+.vjs-sponsor-compact .vjs-sponsor-from { flex: 0 0 auto; order: 0; }
+/* Shrinkable, so a long product name is clipped with an ellipsis instead of pushing
+   the countdown down onto the slogan's row. */
+/* One size for the whole thing. The name keeps its weight, which is enough to tell
+   it from the label beside it without also being taller. */
+.vjs-sponsor-compact .vjs-sponsor-name { flex: 0 1 auto; max-width: 52%; font-size: 10px; }
+.vjs-sponsor-compact .vjs-sponsor-from,
+.vjs-sponsor-compact .vjs-sponsor-resume { font-size: 10px; }
+/* `order: 1` puts it after everything else, and a full-width basis makes that a row
+   of its own rather than the tail of the first one. */
+.vjs-sponsor-compact .vjs-sponsor-slogan {
+  order: 1;
+  flex: 0 0 100%;
+  /* Quieter than the name above it. It is the advertiser's copy, not the disclosure. */
+  font-size: 10px;
+  opacity: 0.82;
+}
+.vjs-sponsor-compact .vjs-sponsor-resume { flex: 0 0 auto; }
+/* The number alone. "Video continues in" is three words explaining a countdown that
+   explains itself, and on one line they are three words of somebody's ad. */
+.vjs-sponsor-compact .vjs-sponsor-resume-lead { display: none; }
 
-@media (max-width: 600px) {
-  .vjs-sponsor-note { top: 8px; left: 8px; right: 8px; max-width: 82%; padding: 6px 10px 8px; }
-  .vjs-sponsor-logo { width: 48px; height: 48px; }
-  .vjs-sponsor-name { font-size: 13px; }
-  .vjs-sponsor-slogan { font-size: 11px; }
+/* A long slogan scrolls rather than being cut off, and only where it has to: on the
+   card it simply wraps. Two copies, translated by the pair, so the loop has no gap. */
+.vjs-sponsor-compact .vjs-sponsor-slogan-scroll { display: flex; gap: 28px; }
+.vjs-sponsor-compact .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text {
+  flex: 0 0 auto;
+  animation: vjs-sponsor-marquee 12s linear infinite;
+}
+@keyframes vjs-sponsor-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-100% - 28px)); }
 }
 
-/* ── While a video roll is on screen ──────────────────────────────────────
-   The whole control bar goes down for the length of the spot — rewind, skip and
-   the time readout are all ways past an ad somebody paid for, and a settings
-   menu over a spot is chrome for a video that is not playing.
+/* Reduced motion means reduced motion: clip it instead. A slogan cut short is a
+   smaller failure than one that moves for somebody who asked that nothing move. */
+@media (prefers-reduced-motion: reduce) {
+  .vjs-sponsor-compact .vjs-sponsor-slogan-scroll { display: block; text-overflow: ellipsis; }
+  .vjs-sponsor-compact .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text { animation: none; }
+  .vjs-sponsor-compact .vjs-sponsor-slogan-scroll .vjs-sponsor-slogan-text[aria-hidden] { display: none; }
+}
 
-   Clicking the video still pauses and resumes it: that is video.js's own
-   userActions.click on the player surface, nothing to do with the control bar.
-
-   The disclosure, the countdown and the banner click target are appended to the
-   PLAYER element rather than the bar, so they all survive this.
-
-   🚨 ROLL ONLY — set from adBreak.isInside(), which reads the roll window. A
-   banner has its own window and is deliberately not wired here: it is painted
-   into the creator's video while that plays normally, so taking the timeline
-   away would be removing a control from ordinary playback.
-
-   Hidden with visibility rather than display so the control bar keeps its
-   height and the buttons either side do not jump as the spot starts and ends. */
 .video-js.vjs-roll-playing .vjs-control-bar {
   opacity: 0;
   pointer-events: none;
@@ -1081,4 +1121,246 @@ body.tv-fullscreen-mode .vjs-tech {
 .video-js.vjs-roll-playing .vjs-progress-control {
   visibility: hidden;
   pointer-events: none;
+}
+
+/* The seconds BEFORE the spot, while "Ad in 3" is on screen.
+ *
+ * Dimmed rather than hidden, which is the whole difference between this and the rule
+ * above. The creator's video is still playing here, so a bar that vanished for three
+ * seconds and came back would read as the player glitching; a bar that visibly greys
+ * out reads as "not now", which is what it means. Everything else in the control bar
+ * stays: pause, volume and fullscreen are not ways past an ad.
+ *
+ * pointer-events covers the drag, the click and the scrub preview together. The
+ * keyboard is refused in the keydown capture and every other path in
+ * adBreak.lockedSeekTarget — CSS is the part the viewer can see, not the part that
+ * enforces anything. */
+.video-js.vjs-roll-imminent .vjs-progress-control {
+  pointer-events: none;
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
+}
+
+/* Close, for a burned-in banner.
+ *
+ * Visible, unlike the click target it sits beside. That one is deliberately invisible
+ * because the banner is already in the picture; a control the viewer is meant to FIND
+ * has the opposite requirement, or the ad reads as unclosable and the complaint is
+ * worse than the ad itself.
+ *
+ * Positioned by the same percentages the click target uses, so it tracks the banner
+ * through resizes and fullscreen instead of drifting off it. */
+.video-js .vjs-banner-close {
+  /* 🚨 `.video-js` in front is load-bearing. video.js ships
+     `.video-js button { background: none; border: none }`, which is (0,1,1) and beats a
+     bare class, so a plain `.vjs-banner-close` rule lost its background and its rim and
+     the button rendered as naked glyph on the video. Both controls here are <button>
+     inside the player, so both need the container in the selector. */
+  position: absolute;
+  /* Above the click target (3), and above .vjs-control-bar (5): closing an ad has to
+     work whether or not the controls happen to be up. */
+  z-index: 6;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  /* Big enough to hit without hunting, on a phone as well as a mouse. 22px was a
+     target you had to aim at. */
+  /* Small. It sits on an advertiser's banner, so it has to be findable without
+     taking a bite out of what they paid for. */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  /* A semi-transparent disc of its own, with a rim.
+     Drawn over a picture we do not control and can assume no contrast against: a
+     dark wash alone disappears against dark footage, so the light rim is what makes
+     the edge findable whatever is behind it. Still see-through, so it never hides
+     more of the advertiser's banner than it has to. */
+  background: rgba(0, 0, 0, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.video-js .vjs-banner-close:hover,
+.video-js .vjs-banner-close:focus-visible {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.85);
+  border-color: rgba(255, 255, 255, 0.85);
+}
+.video-js .vjs-banner-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* Skip, bottom-right and clear of the control bar. Where every player puts it, and
+ * therefore where people already look. */
+.video-js .vjs-ad-skip {
+  position: absolute;
+  right: 12px;
+  /* The corner. updateSkipControl() raises this while the control bar is actually on
+     screen and puts it back when the bar fades; this is the value until it first
+     runs. A fixed 56px with a `max-width: 600px` override was wrong twice over: the
+     media query reads the VIEWPORT, which inside an embed is the iframe and not the
+     phone, and on a short embed 56px is a third of the way up the picture. */
+  bottom: 12px;
+  transition: bottom 0.15s ease;
+  /* Above .vjs-control-bar (5). It sits in the corner the bar reaches, and skipping
+     an ad must not depend on the controls being faded out. */
+  z-index: 6;
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  /* Quiet on purpose. It has to be findable the moment somebody wants out of the ad
+     and invisible until then, so it is grey on a soft panel rather than white on
+     black. The ready state below is the only part that brightens. */
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  /* So the countdown does not jitter the box width as it ticks. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+/* Waiting: present, readable, plainly not pressable yet. */
+.video-js .vjs-ad-skip-waiting { pointer-events: none; opacity: 0.9; cursor: default; }
+
+/* Ready. The border is the whole signal that it became pressable, which is why the
+ * waiting state reserves the space for one. */
+/* Becoming pressable changes what it DOES, not how loud it is. It holds the same
+   grey from the countdown through to the press: no brighter text, no stronger rim,
+   no hover lift. The wording carries the change of state on its own. */
+.video-js .vjs-ad-skip-ready {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.video-js .vjs-ad-skip-ready:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .video-js .vjs-banner-close, .video-js .vjs-ad-skip-ready, .video-js .vjs-ad-skip { transition: none; }
+}
+
+@media (max-width: 600px) {
+  /* Just clear of the control bar rather than floating well above it: 44px left a
+     gap wide enough that the button read as unmoored from the player's own chrome. */
+  /* Position is handled by calc(3em + 8px) on the base rule, at every size. */
+  .video-js .vjs-ad-skip { right: 8px; padding: 4px 9px; font-size: 10px; }
+  .video-js .vjs-banner-close { width: 28px; height: 28px; font-size: 18px; opacity: 0.97; }
+}
+
+/* The shadow element that preloads the banner-free copy.
+ *
+ * Off screen but REAL: it has to decode to be useful, and a `display: none` element
+ * does not. Opacity and pointer-events keep it out of the way until the moment it
+ * becomes the one being watched. */
+.video-js .vjs-shadow-clean {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Promoted: this is now the element the viewer is watching. */
+.video-js .vjs-shadow-clean.vjs-shadow-live {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 2;
+}
+
+/* The original, once the shadow has taken over. Kept in the DOM so the controls,
+   the timeline and every handler bound to it stay alive. */
+.video-js.vjs-hidden-under-shadow > video { opacity: 0; }
+
+/* A banner drawn in the page, for players that cannot close a burned one.
+ *
+ * Positioned by the same placement percentages the burn uses, so the two look alike
+ * and the geometry has a single definition. This one can be hidden by a filter rule,
+ * which is the trade being made on mobile: an ad that can be closed is worth more than
+ * an ad that cannot be blocked, on a device where closing a burned one is impossible.
+ */
+.video-js .vjs-banner-overlay {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Above the click-to-play surface, BELOW the controls (z-index 5). The banner is a
+     layer in the picture, not chrome: the playhead has to stay both visible and
+     usable over it. Being under the bar is also what keeps a scrub from opening the
+     advertiser's link, since video.js drops `pointer-events` on the bar once the
+     controls fade, so the banner is clickable exactly when they are out of the way. */
+  z-index: 3;
+  display: none;
+  overflow: hidden;
+  border-radius: 4px;
+  line-height: 0;
+}
+
+.video-js .vjs-banner-overlay-media {
+  width: 100%;
+  /* `height: 100%` against a parent whose height comes from an aspect ratio is fine,
+     but auto is safer: if the ratio is ever missing the creative still shows at its
+     own size instead of collapsing to nothing. */
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* The disclosure, in the banner's own corner so it travels with the ad rather than
+   sitting somewhere a filter rule can take separately. */
+.video-js .vjs-banner-overlay-label {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+/* The whole banner is the click target. */
+.video-js .vjs-banner-overlay-hit {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+/* Close. Bigger than the burned one's, because this is a touch surface. */
+.video-js .vjs-banner-overlay-close {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Small. It sits in the corner of somebody's paid artwork, and the banner is only
+     a couple of hundred pixels wide on a phone, where 26px ate the corner of it. */
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
 }
