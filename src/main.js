@@ -2440,8 +2440,37 @@ async function dismissBanner() {
  * that knows its viewer has to pass this.
  */
 function viewerAccount() {
-  const v = (new URLSearchParams(window.location.search).get('viewer') || '').trim().toLowerCase();
-  return /^[a-z][a-z0-9.-]{2,15}$/.test(v) ? v : null;
+  const q = new URLSearchParams(window.location.search);
+  const v = (q.get('viewer') || '').trim().toLowerCase();
+  if (/^[a-z][a-z0-9.-]{2,15}$/.test(v)) return v;
+  /* Fall back to the name inside a partner token, so a page that passes `vt` does not
+   * also have to pass `viewer`.
+   *
+   * ⚠️ READ, NOT VERIFIED, and that is fine HERE: this value only reaches the ad
+   * decision, which recognises a Pro subscriber and caps repeats. Nothing identified is
+   * stored by it, and claiming somebody else's name can only cost you ads. The signature
+   * is checked where it matters, on the watch session, by the server that holds the key. */
+  return viewerTokenClaims()?.v || null;
+}
+
+/** The partner token from the URL, or null. */
+function viewerToken() {
+  const t = (new URLSearchParams(window.location.search).get('vt') || '').trim();
+  return t && t.length <= 1024 ? t : null;
+}
+
+/** Its claims, decoded WITHOUT verification. Never trust these for anything stored. */
+function viewerTokenClaims() {
+  try {
+    const t = viewerToken();
+    if (!t) return null;
+    const payload = t.slice(0, t.indexOf('.'));
+    if (!payload) return null;
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    const c = JSON.parse(json);
+    const v = String(c.v || '').trim().toLowerCase();
+    return /^[a-z][a-z0-9.-]{2,15}$/.test(v) ? { ...c, v } : null;
+  } catch { return null; }
 }
 
 /** Where the viewer is in the CONTENT, with any stitched ad time removed. */
@@ -2475,6 +2504,12 @@ async function startWatchSession(videoData) {
         duration: realDuration,
         position: playerContentTime(),
         source: 'player',
+        /* The partner's signed token, when the embedding page passed one. The server
+         * verifies it, takes the viewer from it, and records the signing app as the
+         * source -- so an embed can credit its own viewers without this player, or the
+         * page it sits in, being trusted to name anybody. Absent, the session is
+         * anonymous exactly as before. */
+        viewerToken: viewerToken() || undefined,
         // Marks the row as ad-free so the inventory forecast stops selling it.
         premium: adBreak.isPremiumViewer,
         private: ['1', 'true', 'yes'].includes((new URLSearchParams(window.location.search).get('private') || '').toLowerCase())

@@ -66,7 +66,124 @@ const VIEWER_MIN_PCT = parseFloat(process.env.AD_VIEWER_MIN_PCT) || 75;
 // (67% of the qualifying pool is 5-15min videos) and makes the farm worthless.
 const VIEWER_MAX_SECONDS = parseInt(process.env.AD_VIEWER_MAX_SECONDS, 10) || 1200;
 
+/* Which surfaces may bank a reward at all.
+ *
+ * '3speak' is the native site. A partner running the player SDK inside their own
+ * app is added here BY NAME: unlike an embed it has a logged-in user, so it can
+ * pass a viewer worth recording. An embed ('player') can never qualify however it
+ * is configured, because it has no session of its own to know who is watching.
+ *
+ * 🚨 EVERY NAME IN THIS LIST IS TRUSTED TO NAME ITS VIEWER. The name arrives from
+ * the client and is only ever re-checked against the opt-in below, never proved, so
+ * adding an entry extends that trust to whoever ships that string — and the string
+ * is in their frontend, so in practice to anyone who reads it. Owner's call
+ * 2026-09-17: the signed ad-prefs opt-in is the bar, and it is the same bar
+ * 3speak.tv itself meets. Worth revisiting when the pool is large enough to be
+ * worth farming; at present a qualifying watch-hour is worth well under a cent.
+ */
+const VIEWER_REWARD_SOURCES = new Set(
+  String(process.env.AD_VIEWER_REWARD_SOURCES || '3speak')
+    .split(',').map((v) => v.trim().toLowerCase()).filter(Boolean),
+);
+
 const viewerName = (v) => String(v || '').trim().toLowerCase().slice(0, 16);
+
+/* ─── who may NAME a viewer ───────────────────────────────────────────────────
+ *
+ * A viewer name is the one field here that is worth forging: it decides whose
+ * reward ledger a watch lands in, and the ledger pays real money. The name arrives
+ * from the client, so the question is who is allowed to assert one.
+ *
+ * A browser cannot hold a signing key, so 3speak.tv's own frontend asks its server for
+ * a token instead, and that server signs only for a login it can independently verify.
+ * AD_VIEWER_TOKEN_REQUIRED governs whether a caller may be identified any other way;
+ * with it set, a token is the only route and every path is signed.
+ *
+ * 🚨 AN EMBED IS DIFFERENT IN KIND FROM AN APP. An iframe URL is copy-pasteable and
+ * ends up in referrers, histories and shoulder-surfing range, so the embed never takes
+ * a viewer name in the clear. It presents a token its partner's backend signed, which
+ * means the partner holds a secret we issued and can revoke, and every row is
+ * attributable to exactly one app.
+ *
+ * AD_PARTNER_KEYS = "appid:secret,otherapp:othersecret"
+ */
+const PARTNER_KEYS = (() => {
+  const out = new Map();
+  for (const pair of String(process.env.AD_PARTNER_KEYS || '').split(',')) {
+    const i = pair.indexOf(':');
+    if (i <= 0) continue;
+    const app = pair.slice(0, i).trim().toLowerCase();
+    const secret = pair.slice(i + 1).trim();
+    // A short secret is worse than none, because it reads as protection.
+    if (app && secret.length >= 24) out.set(app, secret);
+  }
+  return out;
+})();
+const TOKEN_REQUIRED = String(process.env.AD_VIEWER_TOKEN_REQUIRED || '') === 'true';
+/* How far in the future a token may claim to be valid. A partner mints one per page
+ * view, so minutes is generous; the ceiling is what stops a leaked token being useful
+ * for a farm rather than for the watch it was issued for. */
+const TOKEN_MAX_TTL_S = Math.max(60, parseInt(process.env.AD_VIEWER_TOKEN_MAX_TTL_S, 10) || 900);
+
+const b64urlToBuf = (v) => Buffer.from(String(v).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+
+/**
+ * Verify a partner-signed viewer token.
+ *
+ * `<payload>.<sig>`, payload = base64url JSON { v, a, p, e }:
+ *   v  viewer's Hive account
+ *   a  app id, which must match a key we issued
+ *   p  "owner/permlink" this token is good for
+ *   e  expiry, unix seconds
+ *
+ * 🚨 BOUND TO ONE VIDEO AND SHORT-LIVED on purpose. The token travels in an iframe
+ * URL, so it is visible to the page embedding it and to anyone looking over a
+ * shoulder. Bound this way, a leaked one buys the watch it was already for.
+ *
+ * Returns { viewer, app } or null. Never throws: a bad token must cost the viewer
+ * their credit, never the video.
+ */
+function verifyViewerToken(token, { owner, permlinks }) {
+  try {
+    if (typeof token !== 'string' || token.length > 1024) return null;
+    const dot = token.indexOf('.');
+    if (dot <= 0) return null;
+    const rawPayload = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const claims = JSON.parse(b64urlToBuf(rawPayload).toString('utf8'));
+
+    const app = String(claims.a || '').trim().toLowerCase();
+    const secret = PARTNER_KEYS.get(app);
+    if (!secret) return null;                       // unknown or revoked partner
+
+    const expected = crypto.createHmac('sha256', secret).update(rawPayload).digest();
+    const given = b64urlToBuf(sig);
+    if (given.length !== expected.length) return null;
+    if (!crypto.timingSafeEqual(given, expected)) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    const exp = parseInt(claims.e, 10);
+    if (!Number.isFinite(exp) || exp <= now) return null;          // expired
+    if (exp - now > TOKEN_MAX_TTL_S) return null;                  // absurd lifetime
+
+    /* Bound to the video actually being opened, so one token is not a farm licence.
+     *
+     * ⚠️ EITHER permlink form is accepted. A partner mints with whatever their URL
+     * carries, which for a 3Speak link is usually the HIVE post's permlink, while the
+     * session is keyed by the ASSET's. Demanding the canonical one would mean every
+     * partner silently minting unusable tokens. */
+    const bound = String(claims.p || '').toLowerCase();
+    const o = String(owner || '').toLowerCase();
+    const ok = (permlinks || []).some((pl) => pl && `${o}/${String(pl).toLowerCase()}` === bound);
+    if (!ok) return null;
+
+    const viewer = viewerName(claims.v);
+    if (!/^[a-z][a-z0-9.-]{2,15}$/.test(viewer)) return null;
+    return { viewer, app };
+  } catch {
+    return null;                                    // malformed is simply unsigned
+  }
+}
 
 /* ─── incubating viewers ──────────────────────────────────────────────────
  * Watch time for a user with no Hive account, who is working towards one.
@@ -322,12 +439,28 @@ async function watchStart(req, res) {
     const durationMs = Math.round(duration * 1000);
     const startPosition = clampPos(req.body?.position, heatmapDuration);
     // Where the view happened: 'player' (embed iframe) | '3speak' (native site).
-    const source = normalizeSource(req.body?.source);
+    let source = normalizeSource(req.body?.source);
     // Who is watching, and ONLY when they have opted into rewards. The client
     // sends it, but the opt-in is re-checked against the database below before a
     // single identified row is written — a client asserting somebody's name must
     // never be enough to start storing their viewing.
-    const viewer = viewerName(req.body?.viewer);
+    let viewer = viewerName(req.body?.viewer);
+    /* A partner-signed token both NAMES the viewer and says which app did it, so the
+     * `source` recorded is the one that actually signed rather than whatever the body
+     * claimed. That is what makes a row attributable and an app revocable. */
+    const signed = verifyViewerToken(req.body?.viewerToken, {
+      owner, permlinks: [permlink, keyPermlink],
+    });
+    if (signed) {
+      viewer = signed.viewer;
+      source = signed.app;
+    } else if (viewer && (TOKEN_REQUIRED || source !== '3speak')) {
+      /* 🚨 An unsigned name is honoured ONLY for 3speak.tv, whose frontend cannot hold
+       * a secret and whose exposure the owner has weighed. Anything else naming a
+       * viewer without a signature is dropped to anonymous: the session still tracks,
+       * the video still plays, nobody's ledger is written to. */
+      viewer = null;
+    }
     // An incubating viewer, who has no Hive name to be the `viewer` above. Held
     // on the session for the same reason: the credit is decided from beats we
     // time ourselves, so the identity has to be fixed when the session opens.
@@ -569,8 +702,10 @@ async function getHeatmap(req, res) {
  * collapsed into one boolean:
  *
  *   opted in      re-read from the database, never trusted from the request.
- *   source        3speak.tv only. An embed on someone else's site cannot know who
- *                 is watching, and 84% of watch hours come from embeds — counting
+ *   source        on the AD_VIEWER_REWARD_SOURCES allowlist. That is 3speak.tv plus
+ *                 any partner app running the SDK in its own UI. An embed on
+ *                 someone else's site can never be on it: it cannot know who is
+ *                 watching, and 84% of watch hours come from embeds — counting
  *                 them would fund a pool almost nobody could ever be paid from.
  *   not the owner otherwise a creator watching their own upload earns both the
  *                 creator share and the viewer share off one play.
@@ -598,7 +733,7 @@ async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
   try {
     const viewer = viewerName(s.viewer);
     if (!viewer) return;
-    if (s.source !== '3speak') return;
+    if (!VIEWER_REWARD_SOURCES.has(s.source)) return;
     if (s.private) return;
     if (viewer === String(s.owner || '').toLowerCase()) return;
     if (!(watchedPct >= VIEWER_MIN_PCT)) return;
@@ -617,7 +752,22 @@ async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
       {
         $max: { watchedPct, contentSeconds: seconds },
         $set: { at: new Date() },
-        $setOnInsert: { payoutId: null, firstAt: new Date() },
+        /* `app` is the session's source, and it is set ON INSERT ONLY.
+         *
+         * The row is keyed on (viewer, owner, permlink) and merged with $max, so a
+         * viewer who watches the same video on two surfaces has ONE row whose
+         * seconds may have come from either. First-touch attribution is therefore
+         * imperfect at the edges and, unlike last-writer-wins, it is at least
+         * stable: a row never changes hands, every row counts once, and summing
+         * seconds by `app` still adds up to the pool.
+         *
+         * That is also the property farm detection needs. A farm shows up as a
+         * burst of NEW rows, and new rows are exactly what this stamps.
+         *
+         * ⚠️ Rows written before this shipped have no `app`. They are 3speak.tv by
+         * definition — nothing else could have written one — so treat a missing
+         * field as '3speak' when reporting rather than backfilling. */
+        $setOnInsert: { payoutId: null, firstAt: new Date(), app: s.source || '3speak' },
       },
       { upsert: true },
     );
