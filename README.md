@@ -42,19 +42,21 @@ SnapieVideoPlayer/
 │   ├── index.html       # Main HTML file
 │   ├── main.js          # Player initialization and logic
 │   └── styles.css       # Custom styles
-├── dist/                # Build output (served by Express)
-├── webpack.config.js    # Webpack configuration
-└── package.json         # Project dependencies
+├── scripts/              # Migration scripts + test-*.mjs test suites
+├── dist/                 # Build output (served by Express, gitignored)
+├── .github/workflows/    # ci.yml (lint/test/build on PRs), deploy.yml (on merge to master)
+├── webpack.config.js     # Webpack configuration
+├── eslint.config.js      # ESLint flat config
+└── package.json          # Project dependencies
 ```
 
 ## Setup
 
 ### Prerequisites
 
-- Node.js (v16 or higher)
+- Node.js (v20 or higher)
 - Access to 3speak MongoDB
 - IPFS gateway access
-- PM2 (for production deployment)
 
 ### Installation
 
@@ -88,6 +90,16 @@ npm start
 ```
 
 Server runs on http://localhost:3005 (configurable via PORT in .env)
+
+### Checks before opening a PR
+
+```bash
+npm run lint   # ESLint
+npm test       # runs scripts/test-*.mjs
+npm run build  # production webpack build
+```
+
+These same three steps run in CI (`.github/workflows/ci.yml`) on every pull request into `master`, which is required to pass before merging.
 
 ## Usage
 
@@ -154,140 +166,29 @@ Increments view count
 }
 ```
 
-## Deployment to VPS
+## Deployment
 
-### Step 1: Prepare the VPS
+Deployment is automated via GitHub Actions, not a manual VPS walkthrough:
+`master` is protected (PR + approval required), and merging to it triggers
+`.github/workflows/deploy.yml`, which builds and restarts the `snapie-player`
+systemd service on the VPS. Every PR is also gated by
+`.github/workflows/ci.yml` (lint, test, build).
 
-1. SSH into your VPS:
-```bash
-ssh user@video.3speak.tv
-```
-
-2. Install Node.js (if not already installed):
-```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt-get install -y nodejs
-```
-
-3. Install PM2 globally:
-```bash
-sudo npm install -g pm2
-```
-
-### Step 2: Deploy the Application
-
-1. Clone the repository on the VPS:
-```bash
-cd /var/www  # or your preferred directory
-git clone <repository-url> SnapieVideoPlayer
-cd SnapieVideoPlayer
-```
-
-2. Install dependencies:
-```bash
-npm install --production
-```
-
-3. Create and configure `.env` file:
-```bash
-cp .env.example .env
-nano .env  # Edit with production values
-```
-
-**Production .env settings:**
-- Set `NODE_ENV=production`
-- Use production MongoDB credentials
-- Set `PORT=3005` (or available port)
-- Update `ALLOWED_ORIGINS` to include your domain
-
-4. Build the frontend:
-```bash
-npm run build
-```
-
-5. Start with PM2:
-```bash
-pm2 start server.js --name "3speak-player"
-pm2 startup  # Enable auto-start on reboot
-pm2 save
-```
-
-6. Check status:
-```bash
-pm2 status
-pm2 logs 3speak-player
-```
-
-### Step 3: Configure Nginx Reverse Proxy
-
-1. Create Nginx configuration:
-```bash
-sudo nano /etc/nginx/sites-available/play.3speak.tv
-```
-
-2. Add this configuration:
-```nginx
-server {
-    listen 80;
-    server_name play.3speak.tv;
-
-    # Increase timeout for video streaming
-    proxy_read_timeout 300;
-    proxy_connect_timeout 300;
-    proxy_send_timeout 300;
-
-    location / {
-        proxy_pass http://localhost:3005;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
-3. Enable the site:
-```bash
-sudo ln -s /etc/nginx/sites-available/play.3speak.tv /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-4. (Optional) Set up SSL with Let's Encrypt:
-```bash
-sudo apt-get install certbot python3-certbot-nginx
-sudo certbot --nginx -d play.3speak.tv
-```
-
-### Step 4: Verify Deployment
-
-1. Check the application:
-```bash
-pm2 logs 3speak-player
-```
-
-2. Test endpoints:
-```bash
-curl http://localhost:3005/api/watch?v=meno/p723so6v
-```
-
-3. Visit in browser:
-- http://play.3speak.tv/watch?v=meno/p723so6v
-- http://play.3speak.tv/embed?v=testuser123/ma4k9uzo
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the one-time VPS/Nginx setup,
+production `.env` reference, verification steps, and rollback instructions.
 
 ## Security Checklist
 
-Before deploying or pushing to git:
+Before pushing to git:
 
 - ✅ `.env` file is in `.gitignore` and will NOT be committed
 - ✅ `.env.example` provides template without sensitive data
 - ✅ All credentials use environment variables (no hardcoded secrets)
 - ✅ MongoDB credentials stored only in `.env`
 - ✅ `dist/` and `node_modules/` excluded from git
+
+Run `./safety-check.sh` locally to verify the above (checks `.env` is
+gitignored and that no MongoDB credentials are hardcoded in tracked files).
 
 **Files that contain sensitive info (already in .gitignore):**
 - `.env` - MongoDB credentials, API keys
@@ -428,8 +329,6 @@ https://play.3speak.tv/embed?v=author/permlink&mode=iframe&layout=square
 ```
 
 Universal 1:1 square container for grid layouts, thumbnails, and ultra-simple embeds.
-
-## Mobile App Integration
 
 ## Mobile App Integration
 
