@@ -26,4 +26,4 @@ jobs:
             npm run build
             npm prune --omit=dev
             sudo systemctl restart snapie-player
-            sudo systemctl is-active --quiet snapie-player
+            systemctl is-active --quiet snapie-player
