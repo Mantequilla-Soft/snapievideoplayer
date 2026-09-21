@@ -94,7 +94,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * key on purpose, so an embed and the watch page share one notion of "already seen".
  */
 const SEEN_KEY = '3speak-ads-seen';
-const SEEN_MINUTES = 30;   // matches AD_FREQUENCY_CAP_MINUTES on the server
+const SEEN_MINUTES = 15;   // matches AD_FREQUENCY_CAP_MINUTES on the server
 
 function readSeen() {
   try {
