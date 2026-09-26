@@ -87,8 +87,31 @@ async function findLegacyVideo(owner, permlink) {
 }
 
 /**
+ * Owner values an upload client wrote when it had no username. tus-js-client
+ * stringifies metadata, so a JS null arrives as the text "null". The asset is
+ * fine, but it is stored under that owner, so neither lookup above matches the
+ * Hive post's author and the post shows "video not found". Seen on 7 3speak-tv
+ * uploads from 2026-08-06 on.
+ */
+const BROKEN_OWNERS = ['null', 'undefined', 'unknown', ''];
+
+/**
+ * Last resort for a broken-owner asset: match the Hive post it was linked to.
+ * Only broken owners, so this can never hand one account's post a video that
+ * another real account owns.
+ */
+function brokenOwnerFilter(owner, permlink) {
+  return {
+    owner: { $in: BROKEN_OWNERS },
+    hive_author: owner,
+    hive_permlink: permlink
+  };
+}
+
+/**
  * Find video in embed collection by owner and permlink.
- * Falls back to hive_permlink when the 3speak permlink doesn't match.
+ * Falls back to hive_permlink when the 3speak permlink doesn't match, then to
+ * the Hive link of an asset stored under a broken owner.
  */
 async function findEmbedVideo(owner, permlink) {
   const database = getDb();
@@ -98,15 +121,15 @@ async function findEmbedVideo(owner, permlink) {
     owner: owner,
     permlink: permlink
   });
+  if (video) return video;
 
-  if (!video) {
-    return await collection.findOne({
-      owner: owner,
-      hive_permlink: permlink
-    });
-  }
+  const byHivePermlink = await collection.findOne({
+    owner: owner,
+    hive_permlink: permlink
+  });
+  if (byHivePermlink) return byHivePermlink;
 
-  return video;
+  return await collection.findOne(brokenOwnerFilter(owner, permlink));
 }
 
 /**
@@ -132,10 +155,15 @@ async function incrementEmbedViews(owner, permlink) {
   const database = getDb();
   const collection = database.collection(process.env.MONGODB_COLLECTION_NEW);
 
-  const filter = {
+  let filter = {
     owner: owner,
     $or: [{ permlink: permlink }, { hive_permlink: permlink }]
   };
+  // Same resolution as findEmbedVideo, or a broken-owner asset plays but never
+  // counts a view.
+  if (!(await collection.countDocuments(filter, { limit: 1 }))) {
+    filter = brokenOwnerFilter(owner, permlink);
+  }
 
   // Initialize views field if it doesn't exist, then increment
   await collection.updateOne(
