@@ -792,6 +792,8 @@ function initializePlayer() {
     // pixels that are already there, an overlay one is drawn by us.
     updateBannerClick(bannerOn);
     updateBannerOverlay(bannerOn);
+    // The ticker: its own window, its own element, nothing in the playlist.
+    updateTicker(currentTime);
     // The clean copy is only worth holding while there is a banner to close. Built
     // when one starts, torn down when it ends.
     // ⚠️ Never tear down a shadow a dismissal has claimed. Closing the banner clears
@@ -876,12 +878,15 @@ function initializePlayer() {
     if (window.parent !== window) {
       window.parent.postMessage({ type: '3speak-play' }, '*');
     }
+    // A paused video freezes the ticker mid-crawl; playing resumes it from there.
+    if (tickerEl) tickerEl.classList.remove('is-paused');
   });
 
   player.on('pause', function() {
     if (window.parent !== window) {
       window.parent.postMessage({ type: '3speak-pause' }, '*');
     }
+    if (tickerEl) tickerEl.classList.add('is-paused');
   });
 
   player.on('ended', function() {
@@ -1888,6 +1893,138 @@ function updateSkipControl(state) {
  * a burned banner carries its label in the pixels, and an overlay has to draw its
  * own. It is not optional in either case.
  */
+/* ─── The ticker ─────────────────────────────────────────────────────────────
+ *
+ * One line crawling along the top of the frame: a fixed "Ad" label, then the
+ * advertiser's avatar, @name, product and message moving right to left. Same markup and
+ * rules as the 3speak.tv watch page (components/ads/TickerCrawl.jsx there):
+ *
+ * - it crosses ONCE in the booked seconds, and freezes while the video is paused;
+ * - it counts as SEEN only after its whole crossing was watched: playback time that
+ *   advanced with the strip on screen and the tab in front. A seek out of the window
+ *   throws a partial run away. Only then is the impression reported and the ad put in
+ *   the seen-list, so the browser agrees with the checker;
+ * - a click goes to OUR origin, which counts it and redirects to the approved link.
+ *
+ * Along the TOP of the frame, so it never competes with the control bar. The 3Speak
+ * logo (top-left) and the muted-autoplay button (top-right) sit on the band's ends.
+ */
+let tickerEl = null;
+let tickerFor = null;
+let tickerWatch = { seconds: 0, lastT: null, done: false };
+
+function resetTicker() {
+  if (tickerEl && tickerEl.parentNode) tickerEl.parentNode.removeChild(tickerEl);
+  tickerEl = null;
+  tickerFor = null;
+  tickerWatch = { seconds: 0, lastT: null, done: false };
+}
+
+function buildTicker(info) {
+  const el = document.createElement('div');
+  el.className = 'vjs-ticker';
+  el.style.setProperty('--ticker-duration', Math.max(3, Number(info.durationSeconds) || 15) + 's');
+
+  const label = document.createElement('span');
+  label.className = 'vjs-ticker-label';
+  label.textContent = info.label || 'Ad';
+  el.appendChild(label);
+
+  const win = document.createElement(info.clickUrl ? 'a' : 'span');
+  win.className = 'vjs-ticker-window';
+  if (info.clickUrl) {
+    win.href = info.clickUrl;
+    win.target = '_blank';
+    win.rel = 'noopener noreferrer sponsored';
+    win.setAttribute('aria-label', 'Open ' + (info.productName || 'the advertiser') + ' in a new tab');
+    // Never let a tap reach video.js, which would toggle playback instead.
+    ['click', 'pointerdown', 'touchstart'].forEach((ev) => win.addEventListener(ev, (e) => e.stopPropagation()));
+  }
+
+  const track = document.createElement('span');
+  track.className = 'vjs-ticker-track';
+  const content = document.createElement('span');
+  content.className = 'vjs-ticker-content';
+  if (info.account) {
+    const img = document.createElement('img');
+    img.className = 'vjs-ticker-avatar';
+    img.src = 'https://images.hive.blog/u/' + encodeURIComponent(info.account) + '/avatar/small';
+    img.alt = '';
+    content.appendChild(img);
+    const who = document.createElement('strong');
+    who.className = 'vjs-ticker-account';
+    who.textContent = '@' + info.account;
+    content.appendChild(who);
+  }
+  if (info.productName) {
+    const prod = document.createElement('span');
+    prod.className = 'vjs-ticker-product';
+    prod.textContent = info.productName;
+    content.appendChild(prod);
+  }
+  const msg = document.createElement('span');
+  msg.className = 'vjs-ticker-message';
+  // textContent, never innerHTML: this is advertiser-written text.
+  msg.textContent = info.message;
+  content.appendChild(msg);
+  track.appendChild(content);
+  win.appendChild(track);
+  el.appendChild(win);
+  return el;
+}
+
+function updateTicker(currentTime) {
+  const info = adBreak.tickerInfo;
+  const dur = player && isFinite(player.duration()) ? player.duration() : 0;
+  const on = !!info && adBreak.isTickerVisible(currentTime, dur);
+  /* A video spot cutting in mid-crossing PAUSES the ticker rather than ending it: hidden
+   * and frozen while the spot plays, then carrying on from the same point with its
+   * watched seconds kept. Throwing the run away there meant a ticker sharing a playback
+   * with an early spot could never complete, and so was never counted. */
+  if (!on && tickerEl && adBreak.isInside(currentTime) && !tickerWatch.done) {
+    tickerEl.style.display = 'none';
+    tickerEl.classList.add('is-paused');
+    tickerWatch.lastT = null;
+    return;
+  }
+  if (!on) {
+    // Out of the window: hide it and forget a partial run. A crossing that has been
+    // watched stays watched.
+    if (tickerEl) { tickerEl.remove(); tickerEl = null; tickerFor = null; }
+    if (!tickerWatch.done) { tickerWatch.seconds = 0; tickerWatch.lastT = null; }
+    return;
+  }
+  const host = player && player.el && player.el();
+  if (!host) return;
+  // Rebuilt on every entry into the window, so a viewer who scrubs back in sees it
+  // crawl from the start rather than from wherever it was left.
+  if (!tickerEl || tickerFor !== info.adKey) {
+    if (tickerEl) tickerEl.remove();
+    tickerEl = buildTicker(info);
+    tickerFor = info.adKey;
+    if (player.paused()) tickerEl.classList.add('is-paused');
+    host.appendChild(tickerEl);
+  }
+  // Back from a spot that paused it.
+  if (tickerEl.style.display === 'none') {
+    tickerEl.style.display = '';
+    if (!player.paused()) tickerEl.classList.remove('is-paused');
+  }
+
+  const playing = !player.paused() && document.visibilityState === 'visible';
+  if (playing && tickerWatch.lastT != null) {
+    const dt = currentTime - tickerWatch.lastT;
+    // Normal playback only: a jump inside the window is not time watched.
+    if (dt > 0 && dt <= 1.5) tickerWatch.seconds += dt;
+  }
+  tickerWatch.lastT = playing ? currentTime : null;
+  const booked = Number(info.durationSeconds) || 0;
+  if (!tickerWatch.done && booked > 0 && tickerWatch.seconds >= booked * 0.95) {
+    tickerWatch.done = true;
+    try { adBreak.tickerWatched(); } catch (_) { /* an unreported impression is not a crash */ }
+  }
+}
+
 let bannerOverlayEl = null;
 let bannerOverlayFor = null;
 let bannerShownReported = false;
@@ -2593,6 +2730,7 @@ async function loadVideoFromData(videoData) {
   // ad inline; anything less than a clear yes falls straight through to the content
   // URL, because no ad is always better than no video.
   adBreak.reset();
+  resetTicker();
   let primaryUrl = videoData.videoUrl;
   try {
     // 🚨 NEVER ON A SHORT. The only slot that fits inside a short is a pre-roll, and
@@ -2638,6 +2776,9 @@ async function loadVideoFromData(videoData) {
        * per-variant segment rewriting stop being on the path at all. ensureShadow()
        * returns early on this flag, so nothing is preloaded either. */
       bannerOverlay: true,
+      // This player can draw the ticker. Whether a viewer gets one is the checker's
+      // call (beta testers on beta channels while the format is in beta).
+      ticker: true,
     });
     if (stitched) {
       primaryUrl = stitched;

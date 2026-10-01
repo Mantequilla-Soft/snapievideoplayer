@@ -14,7 +14,11 @@
  *      measures between beats (clamped) for the watched-seconds total, AND fills
  *      the timeline buckets the playhead actually traversed since the last beat.
  *
- * PRIVACY: no viewer IP is stored, anywhere. The IP is resolved to an ISO country
+ * PRIVACY: no viewer IP is stored, anywhere. The ONE exception is not an IP either:
+ * a viewer who opted into ad rewards gets a KEYED HASH of their address (and of its
+ * /24) on their `ad_viewer_watch` reward row, so several reward accounts watching
+ * from one connection can be seen (see viewerIpHashes). Anonymous sessions never
+ * get one. The IP is resolved to an ISO country
  * code on ingest (local GeoLite2 DB, no network call) and then discarded within
  * the request. A session is identified only by `sid` — 16 random server-issued
  * bytes that live in a client-side JS variable for the length of one watch and are
@@ -270,6 +274,28 @@ function clientIp(req) {
   const xff = req.headers['x-forwarded-for'];
   if (xff) return String(xff).split(',')[0].trim();
   return req.socket?.remoteAddress || req.ip || 'unknown';
+}
+
+// Keyed hashes of a REWARD viewer's address, never the address itself: same
+// `viewer_ip_hash` = same connection, same `viewer_net_hash` = same /24 (/48 for
+// IPv6). Used only on `ad_viewer_watch` rows, which already name the account, so
+// several reward accounts watching from one connection become visible.
+//
+// 🚨 Byte-for-byte the same inputs as the upload service (embedvideos
+// src/utils/ipHash.ts: `ip:<addr>`, `net:<a.b.c.0/24>`), so with the SAME
+// IP_HASH_SECRET a viewer hash and an uploader hash compare directly. Keep the two
+// in step. No secret = both null = nothing recorded. Rotating the secret unlinks
+// every earlier hash. ⚠️ IPv4 is brute-forceable WITH the key: never log or share it.
+function viewerIpHashes(ip) {
+  const secret = process.env.IP_HASH_SECRET || '';
+  if (!secret || !ip || ip === 'unknown') return { viewer_ip_hash: null, viewer_net_hash: null };
+  const addr = String(ip).replace(/^::ffff:/i, '');
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(addr);
+  const net = v4
+    ? `${v4[1]}.${v4[2]}.${v4[3]}.0/24`
+    : `${addr.toLowerCase().split('::')[0].split(':').filter(Boolean).slice(0, 3).join(':')}::/48`;
+  const h = (v) => crypto.createHmac('sha256', secret).update(v).digest('hex').slice(0, 32);
+  return { viewer_ip_hash: h(`ip:${addr}`), viewer_net_hash: h(`net:${net}`) };
 }
 
 // ISO 3166-1 alpha-2 country for an IP, resolved ON INGEST via a LOCAL MaxMind
@@ -636,7 +662,7 @@ async function watchBeat(req, res) {
       { upsert: true },
     );
 
-    await recordViewerReward(database, s, { watchedPct, contentSeconds });
+    await recordViewerReward(database, s, { watchedPct, contentSeconds }, viewerIpHashes(clientIp(req)));
     await recordIncubationWatch(database, s, { contentSeconds: visibleContentSeconds });
 
     res.json({ watchedSeconds, contentSeconds, watchedPct, videoDuration, position: curPos });
@@ -729,7 +755,7 @@ async function getHeatmap(req, res) {
  * Failure is swallowed on purpose: this is a reward ledger hanging off the end of
  * view tracking, and it must never break the thing it is attached to.
  */
-async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
+async function recordViewerReward(database, s, { watchedPct, contentSeconds }, ipHashes = {}) {
   try {
     const viewer = viewerName(s.viewer);
     if (!viewer) return;
@@ -751,7 +777,14 @@ async function recordViewerReward(database, s, { watchedPct, contentSeconds }) {
       { viewer, owner: s.owner, permlink: s.permlink },
       {
         $max: { watchedPct, contentSeconds: seconds },
-        $set: { at: new Date() },
+        // The connection of the latest beat. Only set when there is a hash, so a
+        // missing key never wipes one recorded earlier.
+        $set: {
+          at: new Date(),
+          ...(ipHashes.viewer_ip_hash
+            ? { viewer_ip_hash: ipHashes.viewer_ip_hash, viewer_net_hash: ipHashes.viewer_net_hash }
+            : {}),
+        },
         /* `app` is the session's source, and it is set ON INSERT ONLY.
          *
          * The row is keyed on (viewer, owner, permlink) and merged with $max, so a

@@ -110,6 +110,23 @@ function recentAdKeys() {
   return Object.keys(readSeen());
 }
 
+/**
+ * Remember an ad for a SHORTER time than the list's window (the ticker: 5 minutes).
+ *
+ * The list stores when each ad was seen and drops it SEEN_MINUTES later, so an entry
+ * dated back by the difference drops out after `minutes`. Same stored shape as
+ * everything else in the list, so nothing reading it has to change.
+ */
+function rememberAdSeenFor(minutes, key) {
+  const m = Number(minutes);
+  if (!(m > 0) || m >= SEEN_MINUTES || typeof key !== 'string' || !key) { rememberAdSeen(key); return; }
+  try {
+    const seen = readSeen();
+    seen[key] = Date.now() - (SEEN_MINUTES - m) * 60 * 1000;
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+  } catch { /* storage unavailable — the server still caps a signed-in viewer */ }
+}
+
 function rememberAdSeen(...keys) {
   const flat = keys.flat().filter((k) => typeof k === 'string' && k);
   if (!flat.length) return;
@@ -179,6 +196,11 @@ export function createAdBreak() {
   let bannerSid = null;
   let window_ = null;      // { start, duration } in PLAYER time, once resolved
   let premium = false;     // this viewer pays for Pro, so playback is ad-free
+  /* The TICKER: a line of text drawn along the bottom of the player. A third placement
+   * that never touches the playlist, so a ticker-only playback is the plain video. Its
+   * window is a percentage of the CONTENT, worked out here from the content length. */
+  let ticker = null;
+  let tickerReported = false;
 
   return {
     get active() { return !!session; },
@@ -189,6 +211,40 @@ export function createAdBreak() {
 
     /** The banner running on this playback, or null. */
     get bannerInfo() { return banner; },
+
+    /** The ticker on this playback, or null. */
+    get tickerInfo() { return ticker; },
+
+    /**
+     * Is the ticker crawling at this moment? Content time against the content length,
+     * so a spliced roll ahead of it does not shift it, and never during the spot.
+     */
+    isTickerVisible(playerTime, mediaDuration) {
+      if (!ticker || !isFinite(playerTime) || !isFinite(mediaDuration) || mediaDuration <= 0) return false;
+      if (this.isInside(playerTime)) return false;
+      const total = this.contentDuration(mediaDuration);
+      const start = Math.max(0, (Number(ticker.positionPercent) || 0) / 100) * total;
+      const t = this.contentTime(playerTime);
+      return t >= start && t < start + ticker.durationSeconds;
+    },
+
+    /**
+     * The viewer watched the whole crossing. Only now is it SEEN: the impression is
+     * reported and the ad goes into the seen-list for its own window (capMinutes).
+     * Once per playback; the server refuses a claim that arrives too early.
+     */
+    tickerWatched() {
+      if (!ticker || tickerReported) return;
+      tickerReported = true;
+      if (ticker.adKey) rememberAdSeenFor(ticker.capMinutes, ticker.adKey);
+      if (!ticker.shownUrl) return;
+      fetch(ticker.shownUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        keepalive: true,
+      }).catch(() => { /* an unreported impression is the advertiser's loss, not a crash */ });
+    },
 
     /**
      * May the banner be closed yet?
@@ -252,8 +308,10 @@ export function createAdBreak() {
      * Ask whether this playback carries a spot. Returns the stitched manifest URL,
      * or null to play the content manifest exactly as before.
      */
-    async request({ owner, permlink, viewer, country, manifestUrl, bannerOverlay }) {
+    async request({ owner, permlink, viewer, country, manifestUrl, bannerOverlay, ticker: canTicker = false }) {
       session = null;
+      ticker = null;
+      tickerReported = false;
       window_ = null;
       banner = null;
       bannerWindow = null;
@@ -270,6 +328,9 @@ export function createAdBreak() {
              * player cannot close a burned one. The server does not guess: it is the
              * client that knows what it can do. */
             bannerOverlay: bannerOverlay === true,
+            // This player can draw a ticker. Who actually gets one (beta testers, beta
+            // channels) is the checker's decision.
+            ticker: canTicker === true,
             recentAdKeys: recentAdKeys(),
           }),
         });
@@ -280,6 +341,24 @@ export function createAdBreak() {
         // below: a banner-only playback is still an ad this viewer was shown, and
         // returning first would have left it out of the cap.
         rememberAdSeen(data?.ad?.adKey, data?.banner?.adKey);
+        /* The ticker is NOT remembered here. It counts as seen only once its whole
+         * crossing has been watched (tickerWatched), the same rule the checker uses. And
+         * it is kept independently of the other two: it needs no manifest, so a
+         * ticker-only answer still returns null below and the plain video plays. */
+        if (data && data.ticker && data.ticker.message && Number(data.ticker.durationSeconds) > 0) {
+          ticker = {
+            message: data.ticker.message,
+            account: data.ticker.account || null,
+            productName: data.ticker.productName || null,
+            clickUrl: data.ticker.clickUrl || null,
+            shownUrl: data.ticker.shownUrl || null,
+            positionPercent: Number(data.ticker.positionPercent) || 0,
+            durationSeconds: Number(data.ticker.durationSeconds),
+            label: data.ticker.label || 'Ad',
+            adKey: data.ticker.adKey || null,
+            capMinutes: Number(data.ticker.capMinutes) || null,
+          };
+        }
 
         // Kept whether or not there is also a spot: a playback can carry a banner
         // alone, and then the banner's manifest is the one to load.
@@ -695,6 +774,6 @@ export function createAdBreak() {
     /** How much of the visible timeline is ad, for duration-facing UI. */
     get addedSeconds() { return window_ ? window_.duration : 0; },
 
-    reset() { session = null; window_ = null; skipAfter = null; spotRetired = false; spotEntered = false; spotConsumed = false; countdownSeen = false; adWatched = 0; lastInsideAt = null; watchBeatAt = 0; banner = null; bannerWindow = null; bannerSid = null; premium = false; },
+    reset() { session = null; window_ = null; skipAfter = null; spotRetired = false; spotEntered = false; spotConsumed = false; countdownSeen = false; adWatched = 0; lastInsideAt = null; watchBeatAt = 0; banner = null; bannerWindow = null; bannerSid = null; ticker = null; tickerReported = false; premium = false; },
   };
 }
