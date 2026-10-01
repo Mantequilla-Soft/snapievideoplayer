@@ -1366,33 +1366,30 @@ body.tv-fullscreen-mode .vjs-tech {
 }
 
 /* ─── The ticker ad ────────────────────────────────────────────────────────
- * One line along the bottom of the frame. Mirrors components/ads/TickerCrawl.scss on
- * 3speak.tv so the same booking looks the same in both players.
+ * One line along the TOP of the frame (owner, 2026-10-01). Mirrors
+ * components/ads/TickerCrawl.scss on 3speak.tv so a booking looks the same in both.
  *
- * Under the control bar (z-index 3, like the drawn banner) and lifted above it while
- * the controls show. video.js hides the bar on `.vjs-user-inactive.vjs-playing`, so
- * anything else means the bar is up. 36px = its 3em at the bar's 12px font. */
+ * Up top it never meets the control bar. Two things already live there: the 3Speak
+ * logo at top-left and the muted-autoplay button at top-right (both 10px in). The band
+ * keeps 44px clear at each end so they sit on it rather than on the moving text, and
+ * stays under them (z-index 3). */
 .video-js .vjs-ticker {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  top: 0;
   z-index: 3;
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 32px;
-  padding: 0 8px;
+  height: 44px;
+  padding: 0 44px;
   background: rgba(0, 0, 0, 0.72);
   color: #fff;
-  font-size: 13px;
+  /* The band is fixed at 44px; the type fills more of it than on 3speak.tv because an
+     embed is often shown small on somebody else's page. */
+  font-size: 20px;
   line-height: 1;
-  transition: bottom 0.3s ease;
-}
-
-.video-js:not(.vjs-user-inactive) .vjs-ticker,
-.video-js.vjs-paused .vjs-ticker {
-  bottom: 36px;
 }
 
 .video-js .vjs-ticker-label {
@@ -1401,7 +1398,7 @@ body.tv-fullscreen-mode .vjs-tech {
   border-radius: 3px;
   background: #fff;
   color: #000;
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -1440,8 +1437,8 @@ body.tv-fullscreen-mode .vjs-tech {
 }
 
 .video-js .vjs-ticker-avatar {
-  width: 20px;
-  height: 20px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   object-fit: cover;
   background: rgba(255, 255, 255, 0.15);
@@ -1470,8 +1467,7 @@ body.tv-fullscreen-mode .vjs-tech {
 }
 
 @media (max-width: 480px) {
-  .video-js .vjs-ticker { height: 26px; font-size: 11px; }
-  .video-js:not(.vjs-user-inactive) .vjs-ticker,
-  .video-js.vjs-paused .vjs-ticker { bottom: 30px; }
-  .video-js .vjs-ticker-avatar { width: 16px; height: 16px; }
+  .video-js .vjs-ticker { height: 40px; font-size: 18px; }
+  .video-js .vjs-ticker-label { font-size: 13px; }
+  .video-js .vjs-ticker-avatar { width: 28px; height: 28px; }
 }

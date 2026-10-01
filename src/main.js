@@ -1895,7 +1895,7 @@ function updateSkipControl(state) {
  */
 /* ─── The ticker ─────────────────────────────────────────────────────────────
  *
- * One line crawling along the bottom of the frame: a fixed "Ad" label, then the
+ * One line crawling along the top of the frame: a fixed "Ad" label, then the
  * advertiser's avatar, @name, product and message moving right to left. Same markup and
  * rules as the 3speak.tv watch page (components/ads/TickerCrawl.jsx there):
  *
@@ -1906,8 +1906,8 @@ function updateSkipControl(state) {
  *   the seen-list, so the browser agrees with the checker;
  * - a click goes to OUR origin, which counts it and redirects to the approved link.
  *
- * Sits under the control bar (z-index 3, like the drawn banner) and lifts above it
- * while the controls are showing, so the playhead stays usable.
+ * Along the TOP of the frame, so it never competes with the control bar. The 3Speak
+ * logo (top-left) and the muted-autoplay button (top-right) sit on the band's ends.
  */
 let tickerEl = null;
 let tickerFor = null;
@@ -1977,6 +1977,16 @@ function updateTicker(currentTime) {
   const info = adBreak.tickerInfo;
   const dur = player && isFinite(player.duration()) ? player.duration() : 0;
   const on = !!info && adBreak.isTickerVisible(currentTime, dur);
+  /* A video spot cutting in mid-crossing PAUSES the ticker rather than ending it: hidden
+   * and frozen while the spot plays, then carrying on from the same point with its
+   * watched seconds kept. Throwing the run away there meant a ticker sharing a playback
+   * with an early spot could never complete, and so was never counted. */
+  if (!on && tickerEl && adBreak.isInside(currentTime) && !tickerWatch.done) {
+    tickerEl.style.display = 'none';
+    tickerEl.classList.add('is-paused');
+    tickerWatch.lastT = null;
+    return;
+  }
   if (!on) {
     // Out of the window: hide it and forget a partial run. A crossing that has been
     // watched stays watched.
@@ -1994,6 +2004,11 @@ function updateTicker(currentTime) {
     tickerFor = info.adKey;
     if (player.paused()) tickerEl.classList.add('is-paused');
     host.appendChild(tickerEl);
+  }
+  // Back from a spot that paused it.
+  if (tickerEl.style.display === 'none') {
+    tickerEl.style.display = '';
+    if (!player.paused()) tickerEl.classList.remove('is-paused');
   }
 
   const playing = !player.paused() && document.visibilityState === 'visible';
