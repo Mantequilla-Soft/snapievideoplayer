@@ -1997,6 +1997,12 @@ function fitTickerHold(el) {
   el.style.setProperty('--ticker-start', start + 'px');
   el.style.setProperty('--ticker-end', end + 'px');
   el.style.setProperty('--ticker-to', -c + 'px');
+  // The entry's ease-out ends at the pan's speed, so it slows into the pan rather than
+  // stopping first. Same formula as TickerCrawl's holdEntryEase().
+  const entry = w - start;
+  const pan = start - end;
+  const k = entry > 0 ? Math.min(1, (0.4 * Math.max(0, pan)) / entry) : 0;
+  el.style.setProperty('--ticker-in-ease', 'cubic-bezier(0.2, 0.9, 0.65, ' + (1 - k * 0.35).toFixed(3) + ')');
 }
 
 function updateTicker(currentTime) {

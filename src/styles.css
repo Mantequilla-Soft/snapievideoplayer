@@ -1462,10 +1462,14 @@ body.tv-fullscreen-mode .vjs-tech {
 .video-js .vjs-ticker.is-hold .vjs-ticker-track {
   padding-left: 0;
   animation-name: vjs-ticker-hold;
+  /* The entry's curve (every later keyframe names its own). */
+  animation-timing-function: var(--ticker-in-ease, cubic-bezier(0.2, 0.9, 0.65, 1));
 }
 
 @keyframes vjs-ticker-hold {
-  0% { transform: translateX(var(--ticker-from)); animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1); }
+  /* No timing function here: the entry takes the ELEMENT's (see .is-hold), because a
+     var() inside a keyframe's timing function is not resolved and falls back to ease. */
+  0% { transform: translateX(var(--ticker-from)); }
   20% { transform: translateX(var(--ticker-start)); animation-timing-function: linear; }
   70% { transform: translateX(var(--ticker-end)); animation-timing-function: linear; }
   80% { transform: translateX(var(--ticker-end)); animation-timing-function: cubic-bezier(0.64, 0, 0.78, 0); }
