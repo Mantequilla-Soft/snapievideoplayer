@@ -1973,24 +1973,29 @@ function buildTicker(info) {
   return el;
 }
 
-/* The 'hold' style: slide in from the right, stop centred for the middle 60% of the
- * booked seconds, slide out to the left. Only when the whole line FITS the strip, so
- * it is measured once it is on the page, and re-measured when the player changes size
- * (fullscreen). A line that does not fit keeps crawling. Same keyframes as the site's
- * TickerCrawl, so the /advertise preview is what an embed shows too. */
+/* The 'hold' style: ease in from the right, readable for the middle 60% of the booked
+ * seconds, slide out to the left. A line that fits stops centred; a longer one rests
+ * with its start just inside the left edge and pans slowly until its end is in view.
+ * Measured once it is on the page and again when the player changes size
+ * (fullscreen). Same positions and keyframes as the site's TickerCrawl, so the
+ * /advertise preview is what an embed shows too. */
+const TICKER_HOLD_EDGE = 12;
 function fitTickerHold(el) {
   const win = el.querySelector('.vjs-ticker-window');
   const content = el.querySelector('.vjs-ticker-content');
   if (!win || !content) return;
   const w = win.clientWidth;
   const c = content.scrollWidth;
-  const fits = w > 0 && c > 0 && c <= w - 8;
-  el.classList.toggle('is-hold', fits);
-  if (fits) {
-    el.style.setProperty('--ticker-from', w + 'px');
-    el.style.setProperty('--ticker-center', Math.round((w - c) / 2) + 'px');
-    el.style.setProperty('--ticker-to', -c + 'px');
-  }
+  const measured = w > 0 && c > 0;
+  el.classList.toggle('is-hold', measured);
+  if (!measured) return;
+  const fits = c <= w - 2 * TICKER_HOLD_EDGE;
+  const start = fits ? Math.round((w - c) / 2) : TICKER_HOLD_EDGE;
+  const end = fits ? start : Math.round(w - c - TICKER_HOLD_EDGE);
+  el.style.setProperty('--ticker-from', w + 'px');
+  el.style.setProperty('--ticker-start', start + 'px');
+  el.style.setProperty('--ticker-end', end + 'px');
+  el.style.setProperty('--ticker-to', -c + 'px');
 }
 
 function updateTicker(currentTime) {
