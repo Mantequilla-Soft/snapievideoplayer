@@ -1456,8 +1456,29 @@ body.tv-fullscreen-mode .vjs-tech {
   to { transform: translateX(-100%); }
 }
 
+/* 'hold': eases in (0-20%), pans slowly from its start to its end when it does not fit,
+   gliding to a stop (20-70%; still when it fits), rests with its end in view (70-80%), eases out. The px positions are measured in fitTickerHold(); padding is
+   dropped because they already place it. */
+.video-js .vjs-ticker.is-hold .vjs-ticker-track {
+  padding-left: 0;
+  animation-name: vjs-ticker-hold;
+  /* The entry's curve (every later keyframe names its own). */
+  animation-timing-function: var(--ticker-in-ease, cubic-bezier(0.2, 0.9, 0.65, 1));
+}
+
+@keyframes vjs-ticker-hold {
+  /* No timing function here: the entry takes the ELEMENT's (see .is-hold), because a
+     var() inside a keyframe's timing function is not resolved and falls back to ease. */
+  0% { transform: translateX(var(--ticker-from)); }
+  20% { transform: translateX(var(--ticker-start)); animation-timing-function: cubic-bezier(0.3, 0.3, 0.6, 1); }
+  70% { transform: translateX(var(--ticker-end)); animation-timing-function: linear; }
+  80% { transform: translateX(var(--ticker-end)); animation-timing-function: cubic-bezier(0.64, 0, 0.78, 0); }
+  100% { transform: translateX(var(--ticker-to)); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .video-js .vjs-ticker-track {
+  .video-js .vjs-ticker-track,
+  .video-js .vjs-ticker.is-hold .vjs-ticker-track {
     animation: none;
     padding-left: 0;
     max-width: 100%;

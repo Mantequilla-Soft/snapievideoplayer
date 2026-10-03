@@ -1973,6 +1973,38 @@ function buildTicker(info) {
   return el;
 }
 
+/* The 'hold' style: ease in from the right, readable for the middle 60% of the booked
+ * seconds, ease out to the left. A line that fits stops centred; a longer one rests
+ * with its start just inside the left edge, pans slowly until its end is in view and
+ * rests there a moment before leaving.
+ * Measured once it is on the page and again when the player changes size
+ * (fullscreen). Same positions and keyframes as the site's TickerCrawl, so the
+ * /advertise preview is what an embed shows too. */
+const TICKER_HOLD_EDGE = 12;
+function fitTickerHold(el) {
+  const win = el.querySelector('.vjs-ticker-window');
+  const content = el.querySelector('.vjs-ticker-content');
+  if (!win || !content) return;
+  const w = win.clientWidth;
+  const c = content.scrollWidth;
+  const measured = w > 0 && c > 0;
+  el.classList.toggle('is-hold', measured);
+  if (!measured) return;
+  const fits = c <= w - 2 * TICKER_HOLD_EDGE;
+  const start = fits ? Math.round((w - c) / 2) : TICKER_HOLD_EDGE;
+  const end = fits ? start : Math.round(w - c - TICKER_HOLD_EDGE);
+  el.style.setProperty('--ticker-from', w + 'px');
+  el.style.setProperty('--ticker-start', start + 'px');
+  el.style.setProperty('--ticker-end', end + 'px');
+  el.style.setProperty('--ticker-to', -c + 'px');
+  // The entry's ease-out ends at the pan's speed, so it slows into the pan rather than
+  // stopping first. Same formula as TickerCrawl's holdEntryEase().
+  const entry = w - start;
+  const pan = start - end;
+  const k = entry > 0 ? Math.min(1, (0.4 * Math.max(0, pan)) / entry) : 0;
+  el.style.setProperty('--ticker-in-ease', 'cubic-bezier(0.2, 0.9, 0.65, ' + (1 - k * 0.35).toFixed(3) + ')');
+}
+
 function updateTicker(currentTime) {
   const info = adBreak.tickerInfo;
   const dur = player && isFinite(player.duration()) ? player.duration() : 0;
@@ -2004,6 +2036,14 @@ function updateTicker(currentTime) {
     tickerFor = info.adKey;
     if (player.paused()) tickerEl.classList.add('is-paused');
     host.appendChild(tickerEl);
+    if (info.style === 'hold') {
+      const el = tickerEl;
+      fitTickerHold(el);
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => { if (el.isConnected) fitTickerHold(el); else ro.disconnect(); });
+        ro.observe(el);
+      }
+    }
   }
   // Back from a spot that paused it.
   if (tickerEl.style.display === 'none') {
