@@ -1973,6 +1973,26 @@ function buildTicker(info) {
   return el;
 }
 
+/* The 'hold' style: slide in from the right, stop centred for the middle 60% of the
+ * booked seconds, slide out to the left. Only when the whole line FITS the strip, so
+ * it is measured once it is on the page, and re-measured when the player changes size
+ * (fullscreen). A line that does not fit keeps crawling. Same keyframes as the site's
+ * TickerCrawl, so the /advertise preview is what an embed shows too. */
+function fitTickerHold(el) {
+  const win = el.querySelector('.vjs-ticker-window');
+  const content = el.querySelector('.vjs-ticker-content');
+  if (!win || !content) return;
+  const w = win.clientWidth;
+  const c = content.scrollWidth;
+  const fits = w > 0 && c > 0 && c <= w - 8;
+  el.classList.toggle('is-hold', fits);
+  if (fits) {
+    el.style.setProperty('--ticker-from', w + 'px');
+    el.style.setProperty('--ticker-center', Math.round((w - c) / 2) + 'px');
+    el.style.setProperty('--ticker-to', -c + 'px');
+  }
+}
+
 function updateTicker(currentTime) {
   const info = adBreak.tickerInfo;
   const dur = player && isFinite(player.duration()) ? player.duration() : 0;
@@ -2004,6 +2024,14 @@ function updateTicker(currentTime) {
     tickerFor = info.adKey;
     if (player.paused()) tickerEl.classList.add('is-paused');
     host.appendChild(tickerEl);
+    if (info.style === 'hold') {
+      const el = tickerEl;
+      fitTickerHold(el);
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => { if (el.isConnected) fitTickerHold(el); else ro.disconnect(); });
+        ro.observe(el);
+      }
+    }
   }
   // Back from a spot that paused it.
   if (tickerEl.style.display === 'none') {

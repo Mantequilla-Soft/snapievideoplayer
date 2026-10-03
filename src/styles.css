@@ -1456,6 +1456,20 @@ body.tv-fullscreen-mode .vjs-tech {
   to { transform: translateX(-100%); }
 }
 
+/* 'hold': the line fits, so it slides in, rests centred, slides out. The px positions
+   are measured in fitTickerHold(); padding is dropped because they already place it. */
+.video-js .vjs-ticker.is-hold .vjs-ticker-track {
+  padding-left: 0;
+  animation-name: vjs-ticker-hold;
+}
+
+@keyframes vjs-ticker-hold {
+  0% { transform: translateX(var(--ticker-from)); }
+  20% { transform: translateX(var(--ticker-center)); }
+  80% { transform: translateX(var(--ticker-center)); }
+  100% { transform: translateX(var(--ticker-to)); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .video-js .vjs-ticker-track {
     animation: none;
