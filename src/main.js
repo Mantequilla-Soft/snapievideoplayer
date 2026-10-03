@@ -1974,8 +1974,9 @@ function buildTicker(info) {
 }
 
 /* The 'hold' style: ease in from the right, readable for the middle 60% of the booked
- * seconds, slide out to the left. A line that fits stops centred; a longer one rests
- * with its start just inside the left edge and pans slowly until its end is in view.
+ * seconds, ease out to the left. A line that fits stops centred; a longer one rests
+ * with its start just inside the left edge, pans slowly until its end is in view and
+ * rests there a moment before leaving.
  * Measured once it is on the page and again when the player changes size
  * (fullscreen). Same positions and keyframes as the site's TickerCrawl, so the
  * /advertise preview is what an embed shows too. */
