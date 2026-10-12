@@ -194,6 +194,8 @@ export function createAdBreak() {
   // sid, but it is read from the banner's own manifest URL because that is the only
   // one present in that case.
   let bannerSid = null;
+  // Whether the banner's adKey has gone into the seen list. Set on first sight.
+  let bannerRemembered = false;
   let window_ = null;      // { start, duration } in PLAYER time, once resolved
   let premium = false;     // this viewer pays for Pro, so playback is ad-free
   /* The TICKER: a line of text drawn along the bottom of the player. A third placement
@@ -316,6 +318,7 @@ export function createAdBreak() {
       banner = null;
       bannerWindow = null;
       bannerSid = null;
+      bannerRemembered = false;
       premium = false;
       if (!owner || !permlink || !manifestUrl) return null;
       try {
@@ -337,10 +340,12 @@ export function createAdBreak() {
         if (!res.ok) return null;
         const data = await res.json();
         premium = data?.premium === true;
-        // Recorded as soon as the server hands one over, and BEFORE the early return
-        // below: a banner-only playback is still an ad this viewer was shown, and
-        // returning first would have left it out of the cap.
-        rememberAdSeen(data?.ad?.adKey, data?.banner?.adKey);
+        /* 🚨 NOT remembered here. This is only the server's CHOICE: the viewer may
+         * leave before a mid-roll or the banner ever comes round, and remembering it
+         * now burned the ad for the whole cap window without anyone seeing it.
+         * noteTime() remembers each one the first time it is actually on screen.
+         * Still remembered on entry, not on completion: a viewer who skips away
+         * mid-spot has been shown that ad. Same rule as the watch page. */
         /* The ticker is NOT remembered here. It counts as seen only once its whole
          * crossing has been watched (tickerWatched), the same rule the checker uses. And
          * it is kept independently of the other two: it needs no manifest, so a
@@ -371,6 +376,7 @@ export function createAdBreak() {
             durationSeconds: data.banner.durationSeconds,
             advertiser: data.banner.advertiser || null,
             brand: data.banner.brand || null,
+            adKey: data.banner.adKey || null,
             // The creative to DRAW, when the server handed it over instead of burning
             // it. Dropping this field was why an overlay banner never appeared: the
             // server sent the artwork, the client threw it away at the door, and the
@@ -400,6 +406,7 @@ export function createAdBreak() {
           // Who the ad is from, for the disclosure: logo, product, slogan, and the
           // click URL. Absent fields are fine — the overlay draws what is there.
           brand: data.ad.brand || null,
+          adKey: data.ad.adKey || null,
         };
         return data.ad.manifestUrl;
       } catch (_) {
@@ -565,8 +572,14 @@ export function createAdBreak() {
      * seeing a frame of it. Both, in order, is what "watched" means here.
      */
     noteTime(playerTime) {
+      // Ahead of the spot's early return: a playback can carry a banner alone.
+      if (!bannerRemembered && banner?.adKey && this.isBannerVisible(playerTime)) {
+        bannerRemembered = true;
+        rememberAdSeen(banner.adKey);
+      }
       if (!window_ || !isFinite(playerTime)) return;
       if (this.spansSpot(playerTime)) {
+        if (!spotEntered && session?.adKey) rememberAdSeen(session.adKey);
         spotEntered = true;
         if (lastInsideAt != null) {
           const step = playerTime - lastInsideAt;
@@ -776,6 +789,6 @@ export function createAdBreak() {
     /** How much of the visible timeline is ad, for duration-facing UI. */
     get addedSeconds() { return window_ ? window_.duration : 0; },
 
-    reset() { session = null; window_ = null; skipAfter = null; spotRetired = false; spotEntered = false; spotConsumed = false; countdownSeen = false; adWatched = 0; lastInsideAt = null; watchBeatAt = 0; banner = null; bannerWindow = null; bannerSid = null; ticker = null; tickerReported = false; premium = false; },
+    reset() { session = null; window_ = null; skipAfter = null; spotRetired = false; spotEntered = false; spotConsumed = false; countdownSeen = false; adWatched = 0; lastInsideAt = null; watchBeatAt = 0; banner = null; bannerWindow = null; bannerSid = null; bannerRemembered = false; ticker = null; tickerReported = false; premium = false; },
   };
 }
