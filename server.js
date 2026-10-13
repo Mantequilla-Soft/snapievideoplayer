@@ -960,6 +960,9 @@ app.get('/api/stream', async (req, res) => {
         host: room.host || (liveMatch && liveMatch.host) || null,
         title: room.title || room.post?.title || (liveMatch && liveMatch.title) || '',
         thumbnail: room.backgroundImage || room.post?.thumbnail || (liveMatch && liveMatch.thumbnail) || '',
+        // A free host streaming straight from OBS: no studio burned the 3Speak
+        // mark into the picture, so the player draws it (src/live.js).
+        watermark: !!(room.headless && room.watermark),
       });
     }
   }

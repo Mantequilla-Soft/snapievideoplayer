@@ -3318,6 +3318,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           apiBase: stream.api,
           lkUrl: stream.lk,
           host: stream.host,
+          watermark: !!stream.watermark,
           muted: shouldStartMuted,
         });
       } catch (e) {
@@ -3354,6 +3355,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           apiBase: stream.api,
           lkUrl: stream.lk,
           host: stream.host,
+          watermark: !!stream.watermark,
           muted: shouldStartMuted,
         });
       } catch (e) {
