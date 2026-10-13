@@ -655,7 +655,8 @@ app.get('/api/watch', async (req, res) => {
 
     // ===== MOBILE API RESPONSE (info=true) =====
     if (isInfoRequest) {
-      const videoCdn = convertToCdnUrl(result.urls.primary);
+      // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
+      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary));
       const thumbnailCdn = convertThumbnailToCdn(isEmbed ? video.thumbnail_url : video.thumbnail);
 
       const response = {
@@ -767,7 +768,8 @@ app.get('/api/embed', async (req, res) => {
     
     // ===== MOBILE API RESPONSE (info=true) =====
     if (isInfoRequest) {
-      const videoCdn = convertToCdnUrl(result.urls.primary);
+      // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
+      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary));
       const thumbnailCdn = convertThumbnailToCdn(video.thumbnail_url);
       
       return res.json({
