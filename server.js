@@ -178,9 +178,11 @@ async function isEndedStreamPost(author, permlink) {
 
 // Route an HLS master manifest through the /hls rewrite proxy below (which fixes the
 // legacy-encoder codec bug on the fly). Non-m3u8 URLs pass through unchanged.
-function proxiedManifest(url) {
+// `path` lets native-player callers get a URL whose last path segment ends in .m3u8 —
+// ExoPlayer infers HLS from the extension and treats a bare `/hls` as a progressive file.
+function proxiedManifest(url, path = 'hls') {
   if (!url || typeof url !== 'string' || !/\.m3u8(\?|$)/i.test(url)) return url;
-  return `${SELF_BASE}/hls?u=${encodeURIComponent(url)}`;
+  return `${SELF_BASE}/${path}?u=${encodeURIComponent(url)}`;
 }
 
 // True if a CODECS="..." string lists a video codec. Old 3Speak encodes wrongly
@@ -240,7 +242,7 @@ const HLS_FETCH_TIMEOUT_MS = (() => {
  * gateway so they load straight from the CDN. Correct manifests pass through
  * byte-for-byte. Fail-open: a rewrite bug 302s to the reachable manifest.
  */
-app.get('/hls', async (req, res) => {
+app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
   const upstream = String(req.query.u || '');
   // Only proxy https IPFS-gateway manifests — never an open redirector/SSRF vector.
   if (!/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(upstream) || !/\.m3u8(\?|$)/i.test(upstream)) {
@@ -656,7 +658,7 @@ app.get('/api/watch', async (req, res) => {
     // ===== MOBILE API RESPONSE (info=true) =====
     if (isInfoRequest) {
       // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
-      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary));
+      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8');
       const thumbnailCdn = convertThumbnailToCdn(isEmbed ? video.thumbnail_url : video.thumbnail);
 
       const response = {
@@ -769,7 +771,7 @@ app.get('/api/embed', async (req, res) => {
     // ===== MOBILE API RESPONSE (info=true) =====
     if (isInfoRequest) {
       // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
-      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary));
+      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8');
       const thumbnailCdn = convertThumbnailToCdn(video.thumbnail_url);
       
       return res.json({
