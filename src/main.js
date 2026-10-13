@@ -8,6 +8,8 @@ import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
 import { createScrubPreview } from './scrubPreview';
 import { createHeatmap } from './heatmapBar';
 import { createAdBreak } from './adBreak';
+import { createTimelineUI } from './timelineUI';
+import { sanitizeTimeline } from '../timeline.js';
 // Only for the shadow element that preloads the banner-free copy — the main player is
 // video.js/VHS and is not touched by this.
 import Hls from 'hls.js';
@@ -32,6 +34,9 @@ let player;
 let scrubPreview = null; // YouTube-style low-res seek-bar preview (created with the player)
 let scrubPreviewEnabled = true; // on by default; disable with ?preview=0/false/no
 let heatmapBar = null; // "most replayed" seek-bar heatmap (created with the player)
+// The creator's chapters + link toasters (src/timelineUI.js), created with the player.
+let timelineUI = null;
+let timelineLoad = 0; // guards a late /api/timeline answer against a newer video
 // Server-side ad insertion. Holds the mapping from the player's (stitched) timeline
 // back to content time — see src/adBreak.js for why that matters.
 const adBreak = createAdBreak();
@@ -287,6 +292,31 @@ function initializePlayer() {
     } catch (e) {
       console.warn('Heatmap init failed:', e);
     }
+  }
+
+  // Chapters + link toasters. Toasters work without controls too; chapter marks only
+  // appear where there is a seek bar to draw them on.
+  try {
+    timelineUI = createTimelineUI(player, {
+      // CONTENT time, the same mapping the ticker and the watch tracker use: with a
+      // spot stitched in, the file's clock runs ahead of the creator's video by the
+      // ad, and contentTime() takes it back out (identity when there is none).
+      contentTime: (t) => adBreak.contentTime(t),
+      // The length the seek bar is drawn against (see drawTimelineInContentTime).
+      contentDuration: () => {
+        const d = player.duration();
+        if (!isFinite(d) || d <= 0) return null;
+        return adBreak.resolved ? adBreak.contentDuration(d) : d;
+      },
+      // Never over an ad: while the spot plays, during its "Ad in N" countdown, and
+      // while a spot is known to exist but its position is not (resolve() pending),
+      // because then nobody can say whether the playhead is inside it.
+      adHold: (t) => adBreak.active
+        && (!adBreak.resolved || adBreak.isInside(t) || adBreak.countdownAt(t) != null),
+    });
+    if (scrubPreview) scrubPreview.setLabel((frac) => timelineUI.chapterLabel(frac));
+  } catch (e) {
+    console.warn('Timeline UI init failed:', e);
   }
 
   // Setup logo fade behavior
@@ -794,6 +824,9 @@ function initializePlayer() {
     updateBannerOverlay(bannerOn);
     // The ticker: its own window, its own element, nothing in the playlist.
     updateTicker(currentTime);
+    // Link toasters + chapter marks. After the ticker, so they are placed below the
+    // band it has just drawn.
+    if (timelineUI) timelineUI.update(currentTime);
     // The clean copy is only worth holding while there is a banner to close. Built
     // when one starts, torn down when it ends.
     // ⚠️ Never tear down a shadow a dismissal has claimed. Closing the banner clears
@@ -2771,6 +2804,7 @@ async function loadVideoFromData(videoData) {
   // URL, because no ad is always better than no video.
   adBreak.reset();
   resetTicker();
+  applyTimeline(videoData);
   let primaryUrl = videoData.videoUrl;
   try {
     // 🚨 NEVER ON A SHORT. The only slot that fits inside a short is a pre-roll, and
@@ -2907,6 +2941,28 @@ async function loadVideoFromData(videoData) {
 
 
 
+
+/* The creator's chapters + link toasters for this video.
+ *
+ * Normally in the /api/watch or /api/embed response. When the server's Hive lookup was
+ * still running it says so (`timelinePending`) rather than hold playback, and it is
+ * collected here in the background: the video is already loading by then. Sanitised
+ * again on this side: the API is not the only thing that can hand the player data. */
+function applyTimeline(videoData) {
+  const mine = ++timelineLoad;
+  if (!timelineUI) return;
+  timelineUI.setTimeline(sanitizeTimeline(videoData && videoData.timeline));
+  const post = videoData && videoData.timelinePending && videoData.timelinePost;
+  if (!post || !/^[a-z][a-z0-9.-]{2,15}\/[a-z0-9-]{1,255}$/.test(post)) return;
+  fetch('/api/timeline?post=' + encodeURIComponent(post))
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (mine !== timelineLoad || !d || !d.timeline) return;
+      timelineUI.setTimeline(sanitizeTimeline(d.timeline));
+      debugLog('Timeline arrived late', d.timeline);
+    })
+    .catch(() => { /* no timeline is always fine */ });
+}
 
 // JW Player approach: Read video dimensions and set aspect ratio dynamically
 function handleAspectRatio() {

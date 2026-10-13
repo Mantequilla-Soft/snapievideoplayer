@@ -176,6 +176,110 @@ async function isEndedStreamPost(author, permlink) {
   }
 }
 
+/* The creator TIMELINE (chapters + link toasters), read from the Hive post's
+ * json_metadata.video and sanitised in ./timeline.js.
+ *
+ * 🚨 NEVER ON THE PLAYBACK PATH. /api/watch and /api/embed wait at most
+ * TIMELINE_WAIT_MS for it; a slower Hive node just means the response goes out
+ * without one, flagged `timelinePending`, and the player asks /api/timeline in the
+ * background once the video is already loading. A Hive failure is no timeline.
+ *
+ * Cached per post in memory: a finished lookup for TIMELINE_TTL_MS (an edit to the
+ * post shows within five minutes), a failed one only briefly so a node blip is not
+ * remembered as "this post has no timeline". Concurrent requests share one fetch. */
+const { sanitizeTimeline, isAccount: isHiveAccount, isPermlink: isHivePermlink } = require('./timeline');
+
+const TIMELINE_TTL_MS = 5 * 60 * 1000;
+const TIMELINE_FAIL_TTL_MS = 30 * 1000;
+const TIMELINE_WAIT_MS = 700;
+const TIMELINE_FETCH_MS = 4000;
+const TIMELINE_CACHE_MAX = 5000;
+const timelineCache = new Map();    // 'author/permlink' -> { until, ok, timeline }
+const timelineInflight = new Map(); // 'author/permlink' -> Promise<{ ok, timeline }>
+
+async function fetchPostTimeline(author, permlink) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), TIMELINE_FETCH_MS);
+  try {
+    const r = await fetch(HIVE_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'condenser_api.get_content', params: [author, permlink], id: 1 }),
+      signal: ac.signal,
+    });
+    if (!r.ok) return { ok: false, timeline: null };
+    const j = await r.json();
+    if (j && j.error) return { ok: false, timeline: null };
+    const post = j?.result;
+    // No post there (get_content answers an empty shell): a real answer, cache it.
+    if (!post || !post.author) return { ok: true, timeline: null };
+    let meta = {};
+    try { meta = JSON.parse(post.json_metadata || '{}'); } catch { /* not JSON */ }
+    return { ok: true, timeline: sanitizeTimeline(meta && meta.video) };
+  } catch {
+    return { ok: false, timeline: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The post's timeline, from cache or Hive. Resolves to { ok, timeline }. */
+function postTimeline(author, permlink) {
+  if (!isHiveAccount(author) || !isHivePermlink(permlink)) {
+    return Promise.resolve({ ok: true, timeline: null });
+  }
+  const key = `${author}/${permlink}`;
+  const hit = timelineCache.get(key);
+  if (hit && hit.until > Date.now()) return Promise.resolve(hit);
+  if (timelineInflight.has(key)) return timelineInflight.get(key);
+  const p = fetchPostTimeline(author, permlink).then((res) => {
+    timelineInflight.delete(key);
+    timelineCache.delete(key);
+    timelineCache.set(key, { ...res, until: Date.now() + (res.ok ? TIMELINE_TTL_MS : TIMELINE_FAIL_TTL_MS) });
+    // Oldest first: Map keeps insertion order, and a refresh re-inserts at the end.
+    while (timelineCache.size > TIMELINE_CACHE_MAX) {
+      timelineCache.delete(timelineCache.keys().next().value);
+    }
+    return res;
+  });
+  timelineInflight.set(key, p);
+  return p;
+}
+
+/**
+ * The fields a player response carries: `{ timeline }` when the lookup finished in
+ * time (null for none), or `{ timeline: null, timelinePending: true, timelinePost }`
+ * when it is still running, so the player can collect it from /api/timeline.
+ */
+async function timelineFields(lookup, author, permlink, startedAt) {
+  if (!lookup) return { timeline: null };
+  // The budget runs from the start of the REQUEST (the lookup started alongside the
+  // Mongo query), so the worst case is max(Mongo, budget) rather than the sum.
+  const left = Math.max(0, TIMELINE_WAIT_MS - (Date.now() - (startedAt || Date.now())));
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), left); });
+  const res = await Promise.race([lookup, late]);
+  clearTimeout(timer);
+  if (res) return { timeline: res.timeline || null };
+  return { timeline: null, timelinePending: true, timelinePost: `${author}/${permlink}` };
+}
+
+/** The lookup already started for the requested post when the doc points at that
+ *  same post, else a lookup for the post the doc does point at. */
+function sameTimeline(ref, owner, permlink, early) {
+  if (early && ref.author === owner && ref.permlink === permlink) return early;
+  return postTimeline(ref.author, ref.permlink);
+}
+
+/** Which Hive post a video doc belongs to. An embed asset may be keyed by its own
+ *  permlink, so the doc's Hive link wins over the request. */
+function timelinePostRef(video, isEmbed, owner, permlink) {
+  if (isEmbed) {
+    return { author: video.hive_author || owner, permlink: video.hive_permlink || permlink };
+  }
+  return { author: video.owner || owner, permlink: video.permlink || permlink };
+}
+
 // Route an HLS master manifest through the /hls rewrite proxy below (which fixes the
 // legacy-encoder codec bug on the fly). Non-m3u8 URLs pass through unchanged.
 // `path` lets native-player callers get a URL whose last path segment ends in .m3u8 —
@@ -632,6 +736,11 @@ app.get('/api/watch', async (req, res) => {
     
     const { owner, permlink } = params;
     const isInfoRequest = req.query.info === 'true';
+    // Start the timeline lookup for the requested post NOW, alongside the Mongo
+    // lookups, so its Hive round trip hides behind theirs. Almost always the same post
+    // the doc points at; when it is not (an asset permlink), it is one cached miss.
+    const startedAt = Date.now();
+    const earlyTimeline = isInfoRequest ? null : postTimeline(owner, permlink);
     
     // Find video in legacy collection first, then fall back to embed collection
     const legacyVideo = await db.findLegacyVideo(owner, permlink);
@@ -672,6 +781,14 @@ app.get('/api/watch', async (req, res) => {
     }
 
     // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
+    // Chapters + link toasters from the Hive post. Bounded wait — see timelineFields.
+    // Not on a placeholder: those play a stand-in clip, not the creator's video.
+    const tlRef = timelinePostRef(video, isEmbed, owner, permlink);
+    const tl = await timelineFields(
+      result.isPlaceholder ? null : sameTimeline(tlRef, owner, permlink, earlyTimeline),
+      tlRef.author, tlRef.permlink, startedAt
+    );
+
     if (isEmbed) {
       const thumbnail = video.thumbnail_url
         || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`;
@@ -698,7 +815,8 @@ app.get('/api/watch', async (req, res) => {
         short: video.short || false,
         createdAt: video.createdAt,
         updatedAt: video.updatedAt,
-        encodingProgress: video.encodingProgress || 0
+        encodingProgress: video.encodingProgress || 0,
+        ...tl
       });
     } else {
       res.json({
@@ -723,7 +841,8 @@ app.get('/api/watch', async (req, res) => {
         videoUrlFallback3: proxiedManifest(result.urls.primary),
         duration: video.duration || 0,
         views: video.views || 0,
-        tags: video.tags_v2 || video.tags || []
+        tags: video.tags_v2 || video.tags || [],
+        ...tl
       });
     }
     
@@ -750,6 +869,9 @@ app.get('/api/embed', async (req, res) => {
     
     const { owner, permlink } = params;
     const isInfoRequest = req.query.info === 'true';
+    // Alongside the Mongo lookup, as in /api/watch.
+    const startedAt = Date.now();
+    const earlyTimeline = isInfoRequest ? null : postTimeline(owner, permlink);
     
     // Find video in embed collection
     const video = await db.findEmbedVideo(owner, permlink);
@@ -793,6 +915,17 @@ app.get('/api/embed', async (req, res) => {
     // Placeholders / still-encoding videos DO change (status, progress) → no cache.
     const cacheable = !result.isPlaceholder
       && String(video.status || '').toLowerCase() === 'published';
+
+    // Chapters + link toasters, bounded wait (timelineFields). Fine to cache for the
+    // same five minutes as the rest: the server-side cache is five minutes as well, and
+    // a response cached while the lookup was still pending only sends the player to
+    // /api/timeline for it.
+    const tlRef = timelinePostRef(video, true, owner, permlink);
+    const tl = await timelineFields(
+      result.isPlaceholder ? null : sameTimeline(tlRef, owner, permlink, earlyTimeline),
+      tlRef.author, tlRef.permlink, startedAt
+    );
+
     res.set('Cache-Control', cacheable ? 'public, max-age=300' : 'no-store');
 
     res.json({
@@ -815,12 +948,36 @@ app.get('/api/embed', async (req, res) => {
       short: video.short || false,
       createdAt: video.createdAt,
       updatedAt: video.updatedAt,
-      encodingProgress: video.encodingProgress || 0
+      encodingProgress: video.encodingProgress || 0,
+      ...tl
     });
     
   } catch (error) {
     console.error('Error fetching embed video:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/timeline?post=author/permlink
+ * The creator timeline (chapters + link toasters) of a Hive post, sanitised.
+ * Asked by the player only when /api/watch or /api/embed went out before the Hive
+ * lookup finished (`timelinePending`). Waits for the lookup (bounded by its own
+ * 4 s timeout) and answers { timeline } — null when the post has none.
+ */
+app.get('/api/timeline', async (req, res) => {
+  const [author, permlink] = String(req.query.post || '').split('/');
+  if (!isHiveAccount(author) || !isHivePermlink(permlink)) {
+    return res.status(400).json({ error: 'Invalid post. Expected: author/permlink' });
+  }
+  try {
+    const r = await postTimeline(author, permlink);
+    res.set('Cache-Control', r.ok ? 'public, max-age=300' : 'no-store');
+    res.json({ timeline: r.timeline || null });
+  } catch (error) {
+    console.error('Error fetching timeline:', error);
+    res.set('Cache-Control', 'no-store');
+    res.json({ timeline: null });
   }
 });
 
