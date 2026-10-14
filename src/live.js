@@ -14,6 +14,7 @@
 
 import { Room, RoomEvent, Track } from 'livekit-client';
 import { playLivePreroll } from './livePreroll.js';
+import { mountLiveChat } from './liveChat.js';
 
 // Preview defaults — match what preview.3speak.tv's OpenPods uses. An embedder
 // can override per-URL with `?api=` and `?lk=`.
@@ -287,6 +288,10 @@ export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, w
 
   // --- connect -------------------------------------------------------------
   const room = new Room({ adaptiveStream: true, dynacast: true });
+
+  // Read-only stream chat beside / over the picture (liveChat.js). Mounted
+  // before connecting so no message sent during the join is missed.
+  mountLiveChat({ wrapper, room });
 
   const attach = (track, participant) => {
     if (!isHost(participant.identity)) return;
