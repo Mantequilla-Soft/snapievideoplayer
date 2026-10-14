@@ -24,7 +24,59 @@ function el(tag, className, styles) {
   return node;
 }
 
-export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, muted = false } = {}) {
+// The free-tier 3Speak mark for a stream that came in straight from OBS.
+//
+// A browser studio burns this logo into its program feed (the SDK's
+// drawWatermark). A stream from OBS never passes through that canvas, so for a
+// free host the hangouts server marks the room `headless && watermark` and the
+// player draws the same mark: the same image (assets/3S_logodark.png, copied
+// from the 3speak.tv frontend) and the same geometry as drawWatermark and the
+// site's StreamWatermark, i.e. top-left of the PICTURE (inside the letterbox),
+// a margin of 16/720 of the frame height, the logo 6% of the frame height, 90%
+// opacity. It replaces the small corner logo, and the LIVE badge moves to its
+// right so the two never overlap.
+const WATERMARK_SRC = '/assets/3S_logodark.png';
+const WATERMARK_ASPECT = 1200 / 296;
+
+function addWatermark(wrapper, video, badge) {
+  const corner = document.getElementById('logo-top-left');
+  if (corner) corner.style.display = 'none';
+  const img = el('img', 'live-watermark', {
+    position: 'absolute', zIndex: 3, opacity: '0.9', width: 'auto',
+    pointerEvents: 'none', userSelect: 'none', display: 'none',
+  });
+  img.src = WATERMARK_SRC;
+  img.alt = '';
+  img.draggable = false;
+  wrapper.appendChild(img);
+
+  const measure = () => {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const box = wrapper.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+    // Before the first frame, assume the 16:9 frame the wrapper is sized for.
+    const scale = vw && vh ? Math.min(box.width / vw, box.height / vh) : 1;
+    const fw = vw && vh ? vw * scale : box.width;
+    const fh = vw && vh ? vh * scale : box.height;
+    const margin = (16 / 720) * fh;
+    const left = (box.width - fw) / 2 + margin;
+    const top = (box.height - fh) / 2 + margin;
+    const height = Math.max(12, Math.round(fh * 0.06));
+    Object.assign(img.style, {
+      left: `${Math.round(left)}px`, top: `${Math.round(top)}px`, height: `${height}px`, display: 'block',
+    });
+    // Keep the LIVE badge just right of the mark.
+    if (badge) badge.style.left = `${Math.round(left + height * WATERMARK_ASPECT + 8)}px`;
+  };
+  measure();
+  video.addEventListener('loadedmetadata', measure);
+  video.addEventListener('resize', measure);
+  window.addEventListener('resize', measure);
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measure).observe(wrapper);
+}
+
+export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, watermark, muted = false } = {}) {
   if (!roomName) throw new Error('No live session specified (missing ?live=<room>)');
 
   const api = (apiBase || DEFAULT_API).replace(/\/$/, '');
@@ -127,16 +179,21 @@ export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, m
   // --- resolve host identity (so we only render the streamer, not guests) --
   // Prefer the host handed in by the backend resolver; only hit the API when
   // we weren't given one (e.g. the direct `?live=<room>` override path).
+  // The direct `?live=` path also has no watermark answer yet, so it reads the
+  // room once for both.
   let hostIdentity = host || null;
-  if (!hostIdentity) {
+  let showWatermark = watermark;
+  if (!hostIdentity || showWatermark === undefined) {
     try {
       const metaRes = await fetch(`${api}/rooms/${encodeURIComponent(roomName)}`);
       if (metaRes.ok) {
         const meta = await metaRes.json();
-        hostIdentity = meta?.host || null;
+        hostIdentity = hostIdentity || meta?.host || null;
+        if (showWatermark === undefined) showWatermark = !!(meta?.headless && meta?.watermark);
       }
     } catch { /* non-fatal — fall back to first non-guest track */ }
   }
+  if (showWatermark) addWatermark(wrapper, video, badge);
 
   const isViewerIdentity = (id) => id && (id.startsWith('guest-') || id.startsWith('obs-'));
   const isHost = (id) => (hostIdentity ? id === hostIdentity : !isViewerIdentity(id));

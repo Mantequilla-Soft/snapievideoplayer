@@ -12,7 +12,7 @@ import Hls from 'hls.js';
  * so scrubbing the preview can't disturb playback.
  *
  * @param {import('video.js').Player} player  the main video.js player
- * @returns {{ setSource(url:string):void, destroy():void }}
+ * @returns {{ setSource(url:string):void, setLabel(fn:Function):void, destroy():void }}
  */
 export function createScrubPreview(player) {
   const playerEl = player.el();
@@ -30,8 +30,13 @@ export function createScrubPreview(player) {
   vid.setAttribute('playsinline', '');
   const timeEl = document.createElement('div');
   timeEl.className = 'scrub-preview-time';
+  // The chapter under the cursor, when the video has chapters (see timelineUI.js).
+  const chapterEl = document.createElement('div');
+  chapterEl.className = 'scrub-preview-chapter';
   wrap.appendChild(vid);
+  wrap.appendChild(chapterEl);
   wrap.appendChild(timeEl);
+  let labelFor = null; // (fraction of the bar) => string
   playerEl.appendChild(wrap);
 
   let hls = null;
@@ -120,6 +125,10 @@ export function createScrubPreview(player) {
     const t = frac * dur;
     seekTo(t);
     timeEl.textContent = fmt(t);
+    // textContent: a chapter title is the creator's text.
+    const label = labelFor ? labelFor(frac) : '';
+    chapterEl.textContent = label || '';
+    chapterEl.style.display = label ? '' : 'none';
 
     // Centre the thumbnail on the cursor, clamped inside the player.
     const pRect = playerEl.getBoundingClientRect();
@@ -158,6 +167,8 @@ export function createScrubPreview(player) {
 
   return {
     setSource,
+    /** Label the preview with fn(fraction of the bar), e.g. the chapter title. */
+    setLabel(fn) { labelFor = typeof fn === 'function' ? fn : null; },
     destroy() {
       teardownHls();
       if (pc) {
