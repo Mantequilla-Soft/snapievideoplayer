@@ -226,7 +226,20 @@ export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, w
   // After the room is known to exist (the guest token above) and BEFORE the
   // connection, so nothing of the stream is seen or heard under the spot. Only
   // with a known host: the checker places the spot on the host's stream.
-  if (hostIdentity) await playLivePreroll({ wrapper, video, host: hostIdentity, room: roomName });
+  // The stream's own chrome sits ABOVE the <video>: the "Connecting…"
+  // placeholder covers the whole frame until the first track lands, and the
+  // badge / viewer count / watermark sit in its corners. The spot plays on that
+  // same <video>, so all of it steps aside for the spot and comes back after.
+  if (hostIdentity) {
+    const chrome = [placeholder, badge, viewers, wrapper.querySelector('.live-watermark')].filter(Boolean);
+    const shown = chrome.map((node) => node.style.display);
+    chrome.forEach((node) => { node.style.display = 'none'; });
+    try {
+      await playLivePreroll({ wrapper, video, host: hostIdentity, room: roomName });
+    } finally {
+      chrome.forEach((node, i) => { node.style.display = shown[i]; });
+    }
+  }
 
   // --- connect -------------------------------------------------------------
   const room = new Room({ adaptiveStream: true, dynacast: true });
