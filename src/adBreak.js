@@ -148,6 +148,11 @@ const CAP_ID = (() => {
   }
 })();
 
+/* For the live-stream pre-roll (livePreroll.js), which runs outside the Video.js
+ * player and its break logic but must ask with the same cap id and the same
+ * "already seen" list, so the checker caps it like every other spot. */
+export { AD_BASE, CAP_ID, recentAdKeys, rememberAdSeen };
+
 export function createAdBreak() {
   let session = null;      // { sid, position, durationSeconds, label, advertiser, brand }
   // The banner is a SEPARATE placement, from a separate advertiser, and can be

@@ -9,8 +9,11 @@
 // `#snapie-player` <video> element.
 //
 // Nothing here touches the HLS path — it's only imported when `?live=` is set.
+// The one exception is a video PRE-ROLL (livePreroll.js), played on the same
+// <video> before the LiveKit connection is made.
 
 import { Room, RoomEvent, Track } from 'livekit-client';
+import { playLivePreroll } from './livePreroll.js';
 
 // Preview defaults — match what preview.3speak.tv's OpenPods uses. An embedder
 // can override per-URL with `?api=` and `?lk=`.
@@ -218,6 +221,12 @@ export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, w
   }
   const { token } = await tokRes.json();
   if (!token) throw new Error('The live session did not return a viewer token');
+
+  // --- pre-roll ------------------------------------------------------------
+  // After the room is known to exist (the guest token above) and BEFORE the
+  // connection, so nothing of the stream is seen or heard under the spot. Only
+  // with a known host: the checker places the spot on the host's stream.
+  if (hostIdentity) await playLivePreroll({ wrapper, video, host: hostIdentity, room: roomName });
 
   // --- connect -------------------------------------------------------------
   const room = new Room({ adaptiveStream: true, dynacast: true });
