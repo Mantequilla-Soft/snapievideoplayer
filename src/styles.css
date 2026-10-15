@@ -988,16 +988,26 @@ body.tv-fullscreen-mode .vjs-tech {
   max-width: min(260px, 48%);
   padding: 7px 11px 8px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(6px);
+  /* A light tint and NO backdrop blur. The disclosure sits on the advertiser's own
+     spot, and whatever they put in that corner (a URL, a price, a face) has to stay
+     visible through it: a 60% ground plus a 6px backdrop blur turned the corner into
+     a smudge. Readability comes from the text halo instead, which carries on any
+     background, white included. Same values as 3speak.tv's AdOverlay.scss. */
+  background: rgba(0, 0, 0, 0.32);
   color: #fff;
+  text-shadow:
+    0 0 1px #000,
+    0 0 2px #000,
+    0 0 2px #000,
+    0 1px 4px rgba(0, 0, 0, 0.85),
+    0 0 8px rgba(0, 0, 0, 0.5);
   font-size: 11px;
   line-height: 1.35;
   text-decoration: none;
 }
 
 .vjs-sponsor-link { pointer-events: auto; cursor: pointer; }
-.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.75); }
+.vjs-sponsor-link:hover { background: rgba(0, 0, 0, 0.48); }
 
 .vjs-sponsor-logo {
   flex: 0 0 auto;
@@ -1013,11 +1023,15 @@ body.tv-fullscreen-mode .vjs-tech {
 .vjs-sponsor-from {
   flex: 1 0 100%;
   order: -1;
-  opacity: 0.85;
+  opacity: 0.92;
   font-size: 10px;
   letter-spacing: 0.01em;
 }
 
+/* 🚨 `overflow: hidden` (for the ellipsis and the slogan's scroll) clips the text
+   halo at the element's box, which draws a hard dark rectangle around the words.
+   Padding gives the glow room inside the clip; the matching negative margin keeps
+   the layout where it was. */
 .vjs-sponsor-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -1026,20 +1040,25 @@ body.tv-fullscreen-mode .vjs-tech {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 6px;
+  margin: -6px;
 }
 
 .vjs-sponsor-slogan {
   flex: 1 0 100%;
   min-width: 0;
   overflow: hidden;
-  opacity: 0.9;
+  opacity: 0.95;
   white-space: nowrap;
+  /* Vertical room only: sideways padding would change the width the scroll measures. */
+  padding-block: 6px;
+  margin-block: -6px;
 }
 .vjs-sponsor-slogan-text { display: inline-block; }
 
 .vjs-sponsor-resume {
   flex: 1 0 100%;
-  opacity: 0.75;
+  opacity: 0.92;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1216,10 +1235,17 @@ body.tv-fullscreen-mode .vjs-tech {
   padding: 4px 10px;
   border-radius: 999px;
   /* Quiet on purpose. It has to be findable the moment somebody wants out of the ad
-     and invisible until then, so it is grey on a soft panel rather than white on
-     black. The ready state below is the only part that brightens. */
-  background: rgba(0, 0, 0, 0.5);
-  color: rgba(255, 255, 255, 0.7);
+     and invisible until then, so it is soft text on a light tint rather than white
+     on black. No blur, and a light ground, like the disclosure: the corner belongs
+     to the advertiser's spot. The halo keeps it readable on any frame. */
+  background: rgba(0, 0, 0, 0.34);
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow:
+    0 0 1px #000,
+    0 0 2px #000,
+    0 0 2px #000,
+    0 1px 4px rgba(0, 0, 0, 0.85),
+    0 0 8px rgba(0, 0, 0, 0.5);
   font-size: 11px;
   font-weight: 500;
   line-height: 1.35;
