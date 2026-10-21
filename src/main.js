@@ -385,13 +385,11 @@ function initializePlayer() {
     updatePlayerState('Ready');
   });
 
-  // Decided again when the picture changes orientation: a landscape PRE-ROLL is the
-  // first frame loadedmetadata measures, and the video after it may be portrait. Only
-  // on a flip, so quality switches (same shape, new size) do not re-post to the parent.
+  // Measured again whenever the picture changes size: a spot spliced into the video
+  // can be a different shape from it (see handleAspectRatio), and a landscape PRE-ROLL
+  // is the first frame loadedmetadata measures.
   player.on('resize', function() {
-    const w = player.videoWidth();
-    const h = player.videoHeight();
-    if (w && h && (h > w) !== videoIsVertical) handleAspectRatio();
+    handleAspectRatio(true);
   });
 
   player.on('loadedmetadata', function() {
@@ -2980,7 +2978,11 @@ function applyTimeline(videoData) {
 }
 
 // JW Player approach: Read video dimensions and set aspect ratio dynamically
-function handleAspectRatio() {
+// A resize can land a moment before the clock reaches the cut, so "inside the spot"
+// is asked this far ahead as well.
+const SPOT_EDGE_S = 0.5;
+
+function handleAspectRatio(fromResize) {
   if (!player) return;
   
   const videoWidth = player.videoWidth();
@@ -2999,34 +3001,41 @@ function handleAspectRatio() {
     return;
   }
 
-  // The spot's frames say nothing about the video's shape: a landscape spot in a
-  // portrait video is encoded landscape so it fills the box (the checker's
-  // adConform.js). Skipped here; the video's own frames decide on the next resize.
-  if (adBreak.resolved && adBreak.isInside(player.currentTime())) return;
-  
-  const isVertical = videoHeight > videoWidth;
-  videoIsVertical = isVertical; // Store at module level for postMessage orientation commands
   const aspectRatio = `${videoWidth}:${videoHeight}`;
-  
-  debugLog('handleAspectRatio video dimensions', {
-    videoWidth,
-    videoHeight,
-    orientation: isVertical ? 'vertical' : 'horizontal'
-  });
-  
+
   // Check if we're in a fixed layout mode (mobile/square/desktop)
   const hasFixedLayout = document.body.classList.contains('layout-mobile') ||
                         document.body.classList.contains('layout-square') ||
                         document.body.classList.contains('layout-desktop');
   
-  // Only set aspect ratio dynamically if NOT in a fixed layout mode
-  // Fixed layouts handle their own aspect ratios via CSS
+  /* A fluid box follows the PICTURE, the spot included. A landscape spot in a portrait
+   * video is encoded landscape (the checker's adConform.js), so the box opens out to
+   * 16:9 for the length of the break and goes back to the video's shape after it.
+   * That is what lets the spot fill an embed that sends no layout, such as Ecency's
+   * (`mode=iframe` only). Fixed layouts handle their own aspect ratios via CSS. */
   if (!hasFixedLayout) {
     player.aspectRatio(aspectRatio);
     debugLog('Dynamic aspect ratio applied', aspectRatio);
   } else {
     debugLog('Fixed layout mode detected - skipping dynamic aspect ratio');
   }
+
+  /* The VIDEO's orientation is another matter: the spot's frames say nothing about it.
+   * It drives the vertical-video class, the orientation lock and what the parent page
+   * is told, so it is left alone inside the spot and decided by the video's own frames
+   * on the next resize. */
+  const t = player.currentTime();
+  if (adBreak.resolved && (adBreak.isInside(t) || adBreak.isInside(t + SPOT_EDGE_S))) return;
+  
+  const isVertical = videoHeight > videoWidth;
+  const flipped = isVertical !== videoIsVertical;
+  videoIsVertical = isVertical; // Store at module level for postMessage orientation commands
+  
+  debugLog('handleAspectRatio video dimensions', {
+    videoWidth,
+    videoHeight,
+    orientation: isVertical ? 'vertical' : 'horizontal'
+  });
   
   // Add class for any additional styling needs
   if (isVertical) {
@@ -3036,8 +3045,10 @@ function handleAspectRatio() {
   }
   
   // 🚀 FRONTEND INTEGRATION: Send video dimensions to parent window (for iframe embedding)
-  // This allows frontends to dynamically adjust iframe size for vertical videos
-  if (window.parent !== window) {
+  // This allows frontends to dynamically adjust iframe size for vertical videos.
+  // On load, and after that only when the orientation flips: a quality switch changes
+  // the size, not the shape, and must not re-post on every rendition change.
+  if (window.parent !== window && (fromResize !== true || flipped)) {
     const message = {
       type: '3speak-player-ready',
       isVertical: isVertical,
