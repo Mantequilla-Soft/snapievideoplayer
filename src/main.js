@@ -2820,7 +2820,13 @@ async function loadVideoFromData(videoData) {
     //
     // The FLAG, not the length. Length was never the test — the shorts that surfaced
     // this are 61-68s, past any threshold anyone would pick.
-    const stitched = videoData.short === true ? null : await adBreak.request({
+    //
+    // 🚨 NEVER ON A PLACEHOLDER either. A processing / deleted / failed video plays a
+    // stock notice clip, not the creator's content: a roll in front of "this video was
+    // deleted" bills an advertiser for an impression on nothing, and the banner and
+    // ticker would run across a notice that has no audience. The server says which it
+    // is, so this is the same one-condition skip as the short.
+    const stitched = (videoData.short === true || videoData.isPlaceholder) ? null : await adBreak.request({
       owner: videoData.owner,
       permlink: videoData.permlink,
       viewer: viewerAccount(),
