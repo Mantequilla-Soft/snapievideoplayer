@@ -385,6 +385,15 @@ function initializePlayer() {
     updatePlayerState('Ready');
   });
 
+  // Decided again when the picture changes orientation: a landscape PRE-ROLL is the
+  // first frame loadedmetadata measures, and the video after it may be portrait. Only
+  // on a flip, so quality switches (same shape, new size) do not re-post to the parent.
+  player.on('resize', function() {
+    const w = player.videoWidth();
+    const h = player.videoHeight();
+    if (w && h && (h > w) !== videoIsVertical) handleAspectRatio();
+  });
+
   player.on('loadedmetadata', function() {
     // JW Player approach: Read dimensions and set aspect ratio dynamically
     handleAspectRatio();
@@ -2989,6 +2998,11 @@ function handleAspectRatio() {
     debugLog('Video dimensions not yet available');
     return;
   }
+
+  // The spot's frames say nothing about the video's shape: a landscape spot in a
+  // portrait video is encoded landscape so it fills the box (the checker's
+  // adConform.js). Skipped here; the video's own frames decide on the next resize.
+  if (adBreak.resolved && adBreak.isInside(player.currentTime())) return;
   
   const isVertical = videoHeight > videoWidth;
   videoIsVertical = isVertical; // Store at module level for postMessage orientation commands
