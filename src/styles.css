@@ -324,6 +324,40 @@ body.layout-desktop .vjs-control-bar {
   width: 100% !important;
 }
 
+/* Fill layout: an iframe with no layout parameter. The box is exactly the frame the
+   host page gave it, whatever its shape, and the picture is fitted inside it. */
+body.layout-fill .player-wrapper {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  background: #000;
+  overflow: hidden;
+}
+
+body.layout-fill .video-js {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  padding-top: 0 !important;
+}
+
+body.layout-fill .vjs-tech {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+
+body.layout-fill .vjs-control-bar {
+  position: absolute !important;
+  bottom: 0 !important;
+  width: 100% !important;
+}
+
 /* Muted Autoplay Info Button */
 .vjs-muted-autoplay-info {
   position: absolute;

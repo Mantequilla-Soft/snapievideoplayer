@@ -156,7 +156,8 @@ function debugLog(...args) {
 function initializePlayer() {
   const isFixedLayout = document.body.classList.contains('layout-mobile') ||
                         document.body.classList.contains('layout-square') ||
-                        document.body.classList.contains('layout-desktop');
+                        document.body.classList.contains('layout-desktop') ||
+                        document.body.classList.contains('layout-fill');
 
   debugLog('initializePlayer()', {
     isFixedLayout,
@@ -1208,7 +1209,8 @@ function initializePlayer() {
         // Check if we're in a fixed layout mode
         var isFixedLayoutOnExit = document.body.classList.contains('layout-mobile') ||
                                    document.body.classList.contains('layout-square') ||
-                                   document.body.classList.contains('layout-desktop');
+                                   document.body.classList.contains('layout-desktop') ||
+                        document.body.classList.contains('layout-fill');
         // Restore player modes
         player.fill(false);
         // Only enable fluid mode if NOT in a fixed layout
@@ -3006,7 +3008,8 @@ function handleAspectRatio(fromResize) {
   // Check if we're in a fixed layout mode (mobile/square/desktop)
   const hasFixedLayout = document.body.classList.contains('layout-mobile') ||
                         document.body.classList.contains('layout-square') ||
-                        document.body.classList.contains('layout-desktop');
+                        document.body.classList.contains('layout-desktop') ||
+                        document.body.classList.contains('layout-fill');
   
   /* A fluid box follows the PICTURE, the spot included. A landscape spot in a portrait
    * video is encoded landscape (the checker's adConform.js), so the box opens out to
@@ -3364,9 +3367,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     debugLog('Iframe mode enabled - minimal UI');
   }
   
-  if (layout) {
-    document.body.classList.add(`layout-${layout}`);
-    debugLog('Layout class added to body', `layout-${layout}`);
+  /* An iframe with no layout FILLS the frame its host gave it, picture fitted inside.
+   * Left fluid, the box took the video's own shape at full width, so a portrait video in
+   * a 16:9 iframe (Ecency embeds with `mode=iframe` only) was a box nearly twice the
+   * frame's height, cropped to its black top. Inside an iframe the host decides the
+   * size; the player's job is to fit into it, and a landscape spot then fills a 16:9
+   * frame on its own. */
+  const effectiveLayout = layout || (mode === 'iframe' ? 'fill' : null);
+  if (effectiveLayout) {
+    document.body.classList.add(`layout-${effectiveLayout}`);
+    debugLog('Layout class added to body', `layout-${effectiveLayout}`);
   } else {
     debugLog('No layout parameter provided');
   }
