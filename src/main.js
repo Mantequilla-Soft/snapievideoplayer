@@ -3011,11 +3011,11 @@ function handleAspectRatio(fromResize) {
                         document.body.classList.contains('layout-desktop') ||
                         document.body.classList.contains('layout-fill');
   
-  /* A fluid box follows the PICTURE, the spot included. A landscape spot in a portrait
-   * video is encoded landscape (the checker's adConform.js), so the box opens out to
-   * 16:9 for the length of the break and goes back to the video's shape after it.
-   * That is what lets the spot fill an embed that sends no layout, such as Ecency's
-   * (`mode=iframe` only). Fixed layouts handle their own aspect ratios via CSS. */
+  /* A fluid box (the standalone page) follows the PICTURE, the spot included. A
+   * landscape spot in a portrait video is encoded landscape (the checker's
+   * adConform.js), so the box opens out to 16:9 for the length of the break and goes
+   * back to the video's shape after it. Fixed layouts, `fill` for an iframe among
+   * them, handle their own aspect ratios via CSS. */
   if (!hasFixedLayout) {
     player.aspectRatio(aspectRatio);
     debugLog('Dynamic aspect ratio applied', aspectRatio);
@@ -3023,47 +3023,61 @@ function handleAspectRatio(fromResize) {
     debugLog('Fixed layout mode detected - skipping dynamic aspect ratio');
   }
 
-  /* The VIDEO's orientation is another matter: the spot's frames say nothing about it.
-   * It drives the vertical-video class, the orientation lock and what the parent page
-   * is told, so it is left alone inside the spot and decided by the video's own frames
-   * on the next resize. */
   const t = player.currentTime();
-  if (adBreak.resolved && (adBreak.isInside(t) || adBreak.isInside(t + SPOT_EDGE_S))) return;
-  
-  const isVertical = videoHeight > videoWidth;
-  const flipped = isVertical !== videoIsVertical;
-  videoIsVertical = isVertical; // Store at module level for postMessage orientation commands
-  
-  debugLog('handleAspectRatio video dimensions', {
-    videoWidth,
-    videoHeight,
-    orientation: isVertical ? 'vertical' : 'horizontal'
-  });
-  
-  // Add class for any additional styling needs
-  if (isVertical) {
-    player.addClass('vertical-video');
-  } else {
-    player.removeClass('vertical-video');
+  const inSpot = adBreak.resolved && (adBreak.isInside(t) || adBreak.isInside(t + SPOT_EDGE_S));
+
+  /* The VIDEO's orientation is another matter: the spot's frames say nothing about it.
+   * It drives the vertical-video class and the orientation lock, so it is left alone
+   * inside the spot and decided by the video's own frames on the next resize. */
+  if (!inSpot) {
+    const isVertical = videoHeight > videoWidth;
+    videoIsVertical = isVertical; // Store at module level for postMessage orientation commands
+
+    debugLog('handleAspectRatio video dimensions', {
+      videoWidth,
+      videoHeight,
+      orientation: isVertical ? 'vertical' : 'horizontal'
+    });
+
+    // Add class for any additional styling needs
+    if (isVertical) {
+      player.addClass('vertical-video');
+    } else {
+      player.removeClass('vertical-video');
+    }
   }
-  
-  // 🚀 FRONTEND INTEGRATION: Send video dimensions to parent window (for iframe embedding)
-  // This allows frontends to dynamically adjust iframe size for vertical videos.
-  // On load, and after that only when the orientation flips: a quality switch changes
-  // the size, not the shape, and must not re-post on every rendition change.
-  if (window.parent !== window && (fromResize !== true || flipped)) {
-    const message = {
-      type: '3speak-player-ready',
-      isVertical: isVertical,
-      width: videoWidth,
-      height: videoHeight,
-      aspectRatio: videoWidth / videoHeight,
-      orientation: isVertical ? 'vertical' : (videoWidth === videoHeight ? 'square' : 'horizontal')
-    };
-    
-    window.parent.postMessage(message, '*');
-    debugLog('Sent video info to parent window:', message);
-  }
+
+  postPictureShape(videoWidth, videoHeight, inSpot, fromResize !== true);
+}
+
+/* 🚀 FRONTEND INTEGRATION: tell the parent window the shape of the PICTURE ON SCREEN.
+ *
+ * Hosts size the iframe from this: Ecency gives a vertical one a 3:5 box and anything
+ * else 16:9, re-evaluated on every message. While a spot plays it is the SPOT's shape
+ * (`ad: true`), so a landscape spot in a portrait video opens the host's frame out to
+ * 16:9 for the break, and the video's own shape after it puts the frame back. A host
+ * that only cares about the video can ignore `ad: true` messages.
+ *
+ * Always on load; after that only when the shape changes, so a quality switch (new
+ * size, same shape) does not re-post on every rendition change. */
+let lastPostedShape = null;
+function postPictureShape(width, height, ad, always) {
+  if (window.parent === window) return;
+  const isVertical = height > width;
+  const orientation = isVertical ? 'vertical' : (width === height ? 'square' : 'horizontal');
+  if (!always && orientation === lastPostedShape) return;
+  lastPostedShape = orientation;
+  const message = {
+    type: '3speak-player-ready',
+    isVertical,
+    width,
+    height,
+    aspectRatio: width / height,
+    orientation,
+    ad: !!ad
+  };
+  window.parent.postMessage(message, '*');
+  debugLog('Sent video info to parent window:', message);
 }
 
 // Show replay button overlay
