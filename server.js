@@ -29,8 +29,38 @@ const { VIDEO_STATUS } = require('./videoStatus');
 const PLACEHOLDER_TYPE = {
   PROCESSING: 'processing',
   FAILED: 'failed',
-  DELETED: 'deleted'
+  DELETED: 'deleted',
+  STORY_EXPIRED: 'story_expired'
 };
+
+// Stories are shorts that live for 24 hours (checker routes/stories.js writes
+// `story` + `story_expires_at` on the embed doc). Past that, the embed plays this
+// clip and shows this poster instead, wherever the post is embedded. Both ship with
+// the player (assets/, made with the motion graphics cookbook,
+// projects/story-expired-v2, variant b3: a 24h ring draining to 0h, 5s, plays
+// once), so the clip never depends on an IPFS
+// gateway finding it: a freshly pinned CID timed out on the first segment and the
+// embed sat loading forever. PLACEHOLDER_STORY_EXPIRED_CID (ipfs://…) overrides it.
+const STORY_EXPIRED_POSTER = '/assets/story-expired-v2.jpg';
+// New name per clip version, so a cached old segment can never mix into a new manifest.
+const STORY_EXPIRED_MANIFEST = '/assets/story-expired-v2/manifest.m3u8';
+
+function storyExpiresAt(video) {
+  if (video?.story !== true || !video.story_expires_at) return null;
+  const at = new Date(video.story_expires_at);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+function isExpiredStory(video) {
+  const at = storyExpiresAt(video);
+  return !!at && at.getTime() <= Date.now();
+}
+
+// Extra response fields for a story; nothing for every other video.
+function storyFields(video) {
+  const at = storyExpiresAt(video);
+  return at ? { story: true, storyExpiresAt: at.toISOString(), storyExpired: at.getTime() <= Date.now() } : {};
+}
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -286,6 +316,8 @@ function timelinePostRef(video, isEmbed, owner, permlink) {
 // ExoPlayer infers HLS from the extension and treats a bare `/hls` as a progressive file.
 function proxiedManifest(url, path = 'hls') {
   if (!url || typeof url !== 'string' || !/\.m3u8(\?|$)/i.test(url)) return url;
+  // Our own files (the expired-story clip) need no gateway race.
+  if (url.startsWith(`${SELF_BASE}/`)) return url;
   return `${SELF_BASE}/${path}?u=${encodeURIComponent(url)}`;
 }
 
@@ -610,6 +642,11 @@ function getPlaceholderVideo(placeholderType) {
     
     case PLACEHOLDER_TYPE.DELETED:
       return transformIPFSUrl(process.env.PLACEHOLDER_DELETED_CID);
+
+    case PLACEHOLDER_TYPE.STORY_EXPIRED:
+      return process.env.PLACEHOLDER_STORY_EXPIRED_CID
+        ? transformIPFSUrl(process.env.PLACEHOLDER_STORY_EXPIRED_CID)
+        : `${SELF_BASE}${STORY_EXPIRED_MANIFEST}`;
     
     default:
       return null;
@@ -678,6 +715,15 @@ function getVideoUrlsForLegacyStatus(video) {
  */
 function getVideoUrlsForEmbedStatus(video) {
   const status = video.status?.toLowerCase() || '';
+
+  // An expired story says so, unless it was deleted outright (that notice wins).
+  if (isExpiredStory(video)
+      && ![VIDEO_STATUS.DELETE, VIDEO_STATUS.DELETED, VIDEO_STATUS.SELF_DELETED].includes(status)) {
+    return {
+      urls: createPlaceholderUrls(getPlaceholderVideo(PLACEHOLDER_TYPE.STORY_EXPIRED)),
+      isPlaceholder: true
+    };
+  }
   
   // Published videos with manifest - serve actual content
   if (status === VIDEO_STATUS.PUBLISHED && video.manifest_cid) {
@@ -768,14 +814,16 @@ app.get('/api/watch', async (req, res) => {
     if (isInfoRequest) {
       // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
       const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8');
-      const thumbnailCdn = convertThumbnailToCdn(isEmbed ? video.thumbnail_url : video.thumbnail);
+      const thumbnailCdn = isEmbed && isExpiredStory(video)
+        ? `${SELF_BASE}${STORY_EXPIRED_POSTER}`
+        : convertThumbnailToCdn(isEmbed ? video.thumbnail_url : video.thumbnail);
 
       const response = {
         cid: videoCdn,
         thumbnail: thumbnailCdn,
         views: video.views || 0
       };
-      if (isEmbed) response.short = video.short || false;
+      if (isEmbed) Object.assign(response, { short: video.short || false, ...storyFields(video) });
 
       return res.json(response);
     }
@@ -790,8 +838,9 @@ app.get('/api/watch', async (req, res) => {
     );
 
     if (isEmbed) {
-      const thumbnail = video.thumbnail_url
-        || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`;
+      const thumbnail = isExpiredStory(video)
+        ? `${SELF_BASE}${STORY_EXPIRED_POSTER}`
+        : (video.thumbnail_url || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`);
 
       res.json({
         success: true,
@@ -816,6 +865,7 @@ app.get('/api/watch', async (req, res) => {
         createdAt: video.createdAt,
         updatedAt: video.updatedAt,
         encodingProgress: video.encodingProgress || 0,
+        ...storyFields(video),
         ...tl
       });
     } else {
@@ -894,19 +944,23 @@ app.get('/api/embed', async (req, res) => {
     if (isInfoRequest) {
       // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
       const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8');
-      const thumbnailCdn = convertThumbnailToCdn(video.thumbnail_url);
+      const thumbnailCdn = isExpiredStory(video)
+        ? `${SELF_BASE}${STORY_EXPIRED_POSTER}`
+        : convertThumbnailToCdn(video.thumbnail_url);
       
       return res.json({
         cid: videoCdn,
         thumbnail: thumbnailCdn,
         short: video.short || false,
-        views: video.views || 0
+        views: video.views || 0,
+        ...storyFields(video)
       });
     }
     
     // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
-    const thumbnail = video.thumbnail_url
-      || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`;
+    const thumbnail = isExpiredStory(video)
+      ? `${SELF_BASE}${STORY_EXPIRED_POSTER}`
+      : (video.thumbnail_url || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`);
 
     // A finished video's player metadata is effectively immutable — the URLs are
     // content-addressed IPFS (Qm…/manifest.m3u8) and owner/permlink never change.
@@ -926,7 +980,10 @@ app.get('/api/embed', async (req, res) => {
       tlRef.author, tlRef.permlink, startedAt
     );
 
-    res.set('Cache-Control', cacheable ? 'public, max-age=300' : 'no-store');
+    // A live story must not be cached past its expiry, or the embed keeps playing it.
+    const storyLeft = storyExpiresAt(video) ? Math.floor((storyExpiresAt(video) - Date.now()) / 1000) : null;
+    const maxAge = storyLeft == null ? 300 : Math.min(300, storyLeft);
+    res.set('Cache-Control', cacheable && maxAge > 0 ? `public, max-age=${maxAge}` : 'no-store');
 
     res.json({
       success: true,
@@ -949,6 +1006,7 @@ app.get('/api/embed', async (req, res) => {
       createdAt: video.createdAt,
       updatedAt: video.updatedAt,
       encodingProgress: video.encodingProgress || 0,
+      ...storyFields(video),
       ...tl
     });
     
