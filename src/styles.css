@@ -696,6 +696,27 @@ body.tv-fullscreen-mode .vjs-tech {
   flex-shrink: 0;
 }
 
+/* Tip button (tipButton.js): a link styled as a control, bolt in amber */
+.video-js .vjs-control-bar .vjs-tip-button {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.vjs-tip-button svg {
+  width: 1.6em;
+  height: 1.6em;
+  fill: #f59e0b;
+  opacity: 0.85;
+}
+
+.vjs-tip-button:hover svg {
+  opacity: 1;
+}
+
 .video-js .vjs-control-bar .vjs-progress-control {
   flex: 1 1 auto;
   min-width: 20px;
