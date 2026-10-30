@@ -696,6 +696,31 @@ body.tv-fullscreen-mode .vjs-tech {
   flex-shrink: 0;
 }
 
+/* Tip button (tipButton.js): a link styled as a control, with 3speak.tv's
+   outline gift icon in the same white as the CC label */
+.video-js .vjs-control-bar .vjs-tip-button {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.vjs-tip-button svg {
+  width: 1.5em;
+  height: 1.5em;
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vjs-tip-button:hover svg {
+  stroke: #fff;
+}
+
 .video-js .vjs-control-bar .vjs-progress-control {
   flex: 1 1 auto;
   min-width: 20px;

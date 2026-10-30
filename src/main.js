@@ -5,6 +5,7 @@ import qualitySelector from 'videojs-hls-quality-selector';
 import './styles.css';
 import subtitleManager from './subtitleManager';
 import { initCaptionUI, updateOverlay, onSubtitleUpdate } from './captionUI';
+import { setTipVideo } from './tipButton';
 import { createScrubPreview } from './scrubPreview';
 import { createHeatmap } from './heatmapBar';
 import { createAdBreak } from './adBreak';
@@ -2794,6 +2795,7 @@ async function loadVideoFromData(videoData) {
   }
 
   currentVideoData = videoData;
+  setTipVideo(player, videoData);
   player.hasIncrementedView = false;
   player.hasHealedDuration = false;
   player.hasStartedWatchSession = false;

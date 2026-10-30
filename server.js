@@ -847,6 +847,8 @@ app.get('/api/watch', async (req, res) => {
         type: 'embed',
         owner: video.owner,
         permlink: video.permlink,
+        // The Hive post this asset belongs to (tips link the post, not the asset).
+        hivePermlink: video.hive_permlink || null,
         title: video.originalFilename || `${video.owner}/${video.permlink}`,
         status: video.status,
         isPlaceholder: result.isPlaceholder,
@@ -990,6 +992,8 @@ app.get('/api/embed', async (req, res) => {
       type: 'embed',
       owner: video.owner,
       permlink: video.permlink,
+      // The Hive post this asset belongs to (tips link the post, not the asset).
+      hivePermlink: video.hive_permlink || null,
       title: video.originalFilename || `${video.owner}/${video.permlink}`,
       status: video.status,
       isPlaceholder: result.isPlaceholder,
