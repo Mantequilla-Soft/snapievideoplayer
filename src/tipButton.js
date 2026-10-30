@@ -62,7 +62,10 @@ export function setTipVideo(player, videoData) {
     return;
   }
   if (!tipEl) createTipButton(player);
-  const kind = videoData.short === true ? 'short' : 'video';
-  tipEl.href = `${tipHost()}/tip/@${encodeURIComponent(videoData.owner)}/${encodeURIComponent(videoData.permlink)}?kind=${kind}`;
+  // A short links by its asset id (/shorts?v=); a video by its Hive post, which
+  // an embed asset may not share its permlink with.
+  const isShort = videoData.short === true;
+  const permlink = isShort ? videoData.permlink : (videoData.hivePermlink || videoData.permlink);
+  tipEl.href = `${tipHost()}/tip/@${encodeURIComponent(videoData.owner)}/${encodeURIComponent(permlink)}?kind=${isShort ? 'short' : 'video'}`;
   tipEl.style.display = '';
 }
