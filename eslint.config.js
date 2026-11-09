@@ -2,7 +2,7 @@ const js = require('@eslint/js');
 const globals = require('globals');
 
 module.exports = [
-  { ignores: ['dist/**', 'node_modules/**', 'assets/**'] },
+  { ignores: ['dist/**', 'dist.bak-*/**', 'node_modules/**', 'assets/**', 'coverage/**'] },
   js.configs.recommended,
   {
     // Browser-bundled player code, built through webpack/babel.
@@ -38,6 +38,15 @@ module.exports = [
       ecmaVersion: 2022,
       sourceType: 'module',
       globals: { ...globals.node },
+    },
+  },
+  {
+    // Vitest suites (ES modules; server suites load the CommonJS code with createRequire).
+    files: ['tests/**/*.{js,mjs}', 'vitest.config.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.browser },
     },
   },
   {
