@@ -240,7 +240,7 @@ describe('destroy', () => {
     expect(seeks).toEqual([]);
   });
 
-  it.skip('BUG: a touch drag in progress keeps driving the preview after destroy()', () => {
+  it('a touch drag in progress stops driving the preview at destroy()', () => {
     const removed = wrap();
     pointer(progress, 'pointerdown', { clientX: 200, pointerType: 'touch' });
     preview.destroy();

@@ -339,8 +339,9 @@ export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, w
     ? [...room.remoteParticipants.values()].some((p) => p.identity === hostIdentity)
     : room.remoteParticipants.size > 0;
   if (!live) {
-    placeholder.textContent = hostPresent ? 'Stream is starting…' : 'The streamer is offline';
+    // setLive(false) writes "offline"; the "starting" text must come after it.
     setLive(false);
+    if (hostPresent) placeholder.textContent = 'Stream is starting…';
   }
 
   // Respect an explicit `?mute=1` by leaving audio muted until a tap.

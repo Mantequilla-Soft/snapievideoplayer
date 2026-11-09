@@ -59,6 +59,9 @@ const subtitleManager = {
   _author: null,
   _permlink: null,
   _onUpdate: null, // callback when state changes
+  // Bumped on every video change and language pick. A response that comes back
+  // after either has moved on belongs to the old one and must not be applied.
+  _seq: 0,
 
   /** Initialize */
   init(onUpdate) {
@@ -67,11 +70,13 @@ const subtitleManager = {
 
   /** Check which subtitle languages are available for a video */
   async checkAvailability(author, permlink) {
+    ++this._seq; // any SRT still in flight belongs to the old video
     this._author = author;
     this._permlink = permlink;
     this.availableLanguages = null;
     this.selectedLang = null;
     this.cues = [];
+    this.loading = false;
 
     if (!author || !permlink) {
       this._notify();
@@ -82,12 +87,15 @@ const subtitleManager = {
       const res = await fetchWithFallback(function(base) {
         return base + '/subtitles/' + author + '/' + permlink;
       });
+      // The viewer moved to another video while this was in flight.
+      if (this._author !== author || this._permlink !== permlink) return;
       if (!res) {
         this.availableLanguages = null;
         this._notify();
         return;
       }
       const data = await res.json();
+      if (this._author !== author || this._permlink !== permlink) return;
       if (!Array.isArray(data) || data.length === 0) {
         this.availableLanguages = null;
         this._notify();
@@ -115,6 +123,7 @@ const subtitleManager = {
 
   /** Select a subtitle language (or null to disable) */
   async selectLanguage(lang) {
+    var seq = ++this._seq;
     this.selectedLang = lang;
 
     if (lang) {
@@ -160,13 +169,15 @@ const subtitleManager = {
       var parsed = parseSrt(srtText);
       // Cues are assumed sorted by start time (SRT spec); binary search depends on this
       subtitleCache[cacheKey] = parsed;
-      this.cues = parsed;
+      if (seq === this._seq) this.cues = parsed;
     } catch (err) {
       console.error('[subtitleManager] Failed to fetch SRT:', err);
-      this.cues = [];
+      if (seq === this._seq) this.cues = [];
     } finally {
-      this.loading = false;
-      this._notify();
+      if (seq === this._seq) {
+        this.loading = false;
+        this._notify();
+      }
     }
   },
 
