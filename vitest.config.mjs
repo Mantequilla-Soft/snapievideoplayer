@@ -12,6 +12,8 @@ export default defineConfig({
     restoreMocks: true,
     unstubGlobals: true,
     unstubEnvs: true,
+    // server.js logs every request; only show output from failing tests.
+    silent: 'passed-only',
     testTimeout: 15000,
     hookTimeout: 60000,
     projects: [
@@ -41,9 +43,14 @@ export default defineConfig({
       exclude: ['eslint.config.js', 'webpack.config.js', 'vitest.config.mjs', 'dist/**', 'scripts/**', 'tests/**'],
       reporter: ['text-summary', 'text', 'json-summary', 'html'],
       reportsDirectory: 'coverage',
+      // Ratchet: set just under the measured baseline (2026-11-09: lines 99.4,
+      // statements 98.8, branches 95.4, functions 98.6). Raise it as coverage
+      // grows; never lower it to get a PR through.
       thresholds: {
-        lines: 75,
-        statements: 75,
+        lines: 97,
+        statements: 97,
+        branches: 93,
+        functions: 97,
       },
     },
   },

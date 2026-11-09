@@ -166,6 +166,10 @@ Increments view count
 }
 ```
 
+## Testing
+
+`npm test` runs the whole suite and `npm run test:coverage` adds the coverage report and floor that CI enforces. See [tests/README.md](tests/README.md) for the layout, the harness and what we expect from pull requests.
+
 ## Deployment
 
 Deployment is automated via GitHub Actions, not a manual VPS walkthrough:
