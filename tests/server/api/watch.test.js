@@ -55,7 +55,7 @@ describe('GET /api/watch: request validation', () => {
     expect(res.body).toEqual({ error: 'Invalid video format. Expected: owner/permlink' });
   });
 
-  it.skip('BUG: a repeated v parameter answers 400, not a 500 crash', async () => {
+  it('a repeated v parameter answers 400, not a 500 crash', async () => {
     const res = await request(app).get('/api/watch?v=badadib/a&v=badadib/b');
     expect(res.status).toBe(400);
   });
@@ -181,7 +181,7 @@ describe('GET /api/watch: legacy placeholders', () => {
     expect(res.body).toEqual({ error: 'Placeholder configuration error', status });
   });
 
-  it.skip('BUG: an unset placeholder CID answers 404 "Placeholder configuration error", not a 500', async () => {
+  it('an unset placeholder CID answers 404 "Placeholder configuration error", not a 500', async () => {
     vi.stubEnv('PLACEHOLDER_DELETED_CID', undefined);
     await seedLegacy({ permlink: 'cfg-unset', status: 'deleted' });
     const res = await request(app).get('/api/watch?v=badadib/cfg-unset');

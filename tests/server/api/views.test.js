@@ -34,7 +34,7 @@ describe('POST /api/view', () => {
     expect(res.body).toEqual({ error: 'Missing required fields' });
   });
 
-  it.skip('BUG: a request without a JSON body answers 400, not a 500 crash', async () => {
+  it('a request without a JSON body answers 400, not a 500 crash', async () => {
     const res = await request(app).post('/api/view');
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Missing required fields' });
@@ -112,7 +112,7 @@ describe('POST /api/view', () => {
     expect(await (await testDb()).collection('views').countDocuments()).toBe(0);
   });
 
-  it.skip('BUG: an expired story plays the expiry clip, so its view is not counted', async () => {
+  it('an expired story plays the expiry clip, so its view is not counted', async () => {
     await seedEmbed({ permlink: 'old-story', story: true, story_expires_at: new Date(Date.now() - 60e3), views: 5 });
     const res = await request(app).post('/api/view').send({ owner: 'badadib', permlink: 'old-story', type: 'embed' });
     expect(res.body.counted).toBe(false);
@@ -186,7 +186,7 @@ describe('POST /api/duration', () => {
     expect(res.body).toEqual({ error: 'Missing or invalid fields' });
   });
 
-  it.skip('BUG: a request without a JSON body answers 400, not a 500 crash', async () => {
+  it('a request without a JSON body answers 400, not a 500 crash', async () => {
     const res = await request(app).post('/api/duration');
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Missing or invalid fields' });
