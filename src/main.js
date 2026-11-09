@@ -1431,7 +1431,8 @@ async function fetchVideoData(videoParam, type) {
     const response = await fetch(url);
     
     if (!response.ok) {
-      const error = await response.json();
+      // A proxy error page (nginx 502) is HTML: never show the JSON parser's message.
+      const error = await response.json().catch(() => ({}));
       throw new Error(error.error || 'Failed to fetch video');
     }
     

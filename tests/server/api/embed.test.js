@@ -46,6 +46,12 @@ describe('GET /api/embed: request validation', () => {
     expect(res.body).toEqual({ error: 'Invalid video format. Expected: owner/permlink' });
   });
 
+  it('400 for a repeated v parameter', async () => {
+    const res = await request(app).get('/api/embed?v=badadib/a&v=badadib/b');
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Invalid video format. Expected: owner/permlink' });
+  });
+
   it('404 for a video that only exists in the legacy collection', async () => {
     await seedLegacy({ permlink: 'legacy-only' });
     const res = await request(app).get('/api/embed?v=badadib/legacy-only');

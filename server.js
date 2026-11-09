@@ -77,6 +77,10 @@ function parseVideoParams(videoParam) {
   if (!videoParam) {
     return { error: 'Missing video parameter (v)' };
   }
+  // A repeated ?v= arrives as an array (and ?v[x]= as an object): not owner/permlink.
+  if (typeof videoParam !== 'string') {
+    return { error: 'Invalid video format. Expected: owner/permlink' };
+  }
   
   const [owner, permlink] = videoParam.split('/');
   
@@ -104,6 +108,8 @@ function createPlaceholderUrls(placeholderUrl) {
  */
 function transformIPFSUrl(ipfsUrl, useFallback = false) {
   const gateway = useFallback ? process.env.IPFS_GATEWAY_FALLBACK : process.env.IPFS_GATEWAY;
+  // An unset placeholder CID: the callers answer "Placeholder configuration error".
+  if (!ipfsUrl) return null;
   
   if (ipfsUrl.startsWith('ipfs://')) {
     const cidPath = ipfsUrl.replace('ipfs://', '');
@@ -1099,7 +1105,8 @@ app.get('/api/timeline', async (req, res) => {
  */
 app.post('/api/view', async (req, res) => {
   try {
-    const { owner, permlink, type } = req.body;
+    // body-parser 2 leaves req.body undefined when the request has no body.
+    const { owner, permlink, type } = req.body || {};
     
     if (!owner || !permlink || !type) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -1130,8 +1137,9 @@ app.post('/api/view', async (req, res) => {
       VIDEO_STATUS.PUBLISH_MANUAL
     ].includes(status);
     
-    // Only increment views for ready/published videos, not placeholders
-    if (isReadyStatus) {
+    // Only increment views for ready/published videos, not placeholders. An expired
+    // story plays the expiry clip, so it is a placeholder too.
+    if (isReadyStatus && !isExpiredStory(video)) {
       if (type === 'legacy') {
         success = await db.incrementLegacyViews(owner, permlink);
       } else {
@@ -1166,7 +1174,7 @@ app.post('/api/view', async (req, res) => {
  */
 app.post('/api/duration', async (req, res) => {
   try {
-    const { owner, permlink, duration } = req.body;
+    const { owner, permlink, duration } = req.body || {};
     const isValidId = (v) =>
       typeof v === 'string' &&
       v.trim().length > 0 &&

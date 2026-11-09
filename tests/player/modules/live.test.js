@@ -286,7 +286,7 @@ describe('the stream', () => {
     expect(placeholder().style.display).toBe('flex');
   });
 
-  it.skip('BUG: says the stream is starting when the host is present but no video landed yet', async () => {
+  it('says the stream is starting when the host is present but no video landed yet', async () => {
     hangouts();
     lk.chat.mockImplementation(({ room: r }) => { r.remoteParticipants.set('badadib', participant('badadib')); });
     await initLiveSession({ roomName: 'r', host: 'badadib', watermark: false });

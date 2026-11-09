@@ -154,13 +154,16 @@ export function createScrubPreview(player) {
   };
   const onUp = () => { if (dragging) { dragging = false; hide(); } };
   const onLeave = (e) => { if (!e || e.pointerType !== 'touch') hide(); };
+  // Named, so destroy() can remove it (a drag in progress would otherwise keep
+  // seeking the removed preview forever).
+  const onWindowMove = (e) => { if (dragging) update(e.clientX); };
 
   if (pc) {
     pc.addEventListener('pointermove', onMove);
     pc.addEventListener('pointerdown', onDown);
     pc.addEventListener('pointerleave', onLeave);
     // Window-level so a touch drag that escapes the bar still tracks/ends.
-    window.addEventListener('pointermove', (e) => { if (dragging) update(e.clientX); });
+    window.addEventListener('pointermove', onWindowMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
   }
@@ -176,6 +179,8 @@ export function createScrubPreview(player) {
         pc.removeEventListener('pointerdown', onDown);
         pc.removeEventListener('pointerleave', onLeave);
       }
+      dragging = false;
+      window.removeEventListener('pointermove', onWindowMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       try { wrap.remove(); } catch { /* noop */ }

@@ -64,12 +64,10 @@ describe('error card', () => {
     expect(document.querySelectorAll('.player-message')).toHaveLength(1);
   });
 
-  // fetchVideoData parses the error body as JSON before reading .error. A proxy
-  // error page (HTML) therefore surfaces the JSON parser's message to the viewer.
-  it.skip('BUG: a non-JSON error response (e.g. an nginx 502 page) shows "Video not found", not a JSON parse error', async () => {
+  it('a non-JSON error response (e.g. an nginx 502 page) shows "Failed to fetch video", not a JSON parse error', async () => {
     quiet();
     await boot({ routes: { '/api/embed': { status: 502, body: '<html>Bad gateway</html>' } } });
-    expect(card().querySelector('span').textContent).toBe('Video not found');
+    expect(card().querySelector('span').textContent).toBe('Failed to fetch video');
   });
 });
 

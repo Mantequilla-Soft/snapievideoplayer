@@ -196,7 +196,7 @@ describe('selectLanguage', () => {
     expect(net.calls).toHaveLength(0);
   });
 
-  it.skip('BUG: an SRT that arrives after the video changed is not applied to the new video', async () => {
+  it('an SRT that arrives after the video changed is not applied to the new video', async () => {
     let release;
     network({ 'QmEn': () => new Promise((r) => { release = () => r(text(SRT_EN)); }) });
     const first = mgr.selectLanguage('en');
@@ -208,6 +208,23 @@ describe('selectLanguage', () => {
     // The new video has no subtitles at all, so no cue may show on it.
     expect(mgr.cues).toEqual([]);
     expect(mgr.getActiveCue(2)).toBeNull();
+  });
+
+  it('a slow SRT for an earlier pick does not replace a later pick', async () => {
+    let release;
+    network({
+      'QmEn': () => new Promise((r) => { release = () => r(text(SRT_EN)); }),
+      'QmEs': () => text('1\n00:00:01,000 --> 00:00:03,000\nHola\n'),
+    });
+    mgr.availableLanguages = LANGS;
+    const first = mgr.selectLanguage('en');
+    await new Promise((r) => setTimeout(r, 0));
+    await mgr.selectLanguage('es');
+    release();
+    await first;
+    expect(mgr.selectedLang).toBe('es');
+    expect(mgr.getActiveCue(2)).toBe('Hola');
+    expect(mgr.loading).toBe(false);
   });
 });
 

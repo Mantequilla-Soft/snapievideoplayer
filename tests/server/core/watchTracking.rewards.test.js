@@ -91,13 +91,31 @@ describe('ad viewer reward: forged beats', () => {
   // beat. With beats sent back to back the credited time is ~0, but the 12s
   // floor still accepts each 10s jump as real playback, so contentSeconds and
   // watchedPct (both paid on) grow without any wall-clock time passing.
-  it.skip('BUG: a burst of back-to-back beats can bank a reward with no time watched', async () => {
+  it('a burst of back-to-back beats banks no reward with no time watched', async () => {
     const s = (await d.start({ source: '3speak', viewer: 'viewer1' })).body;
     let last;
     for (const position of [10, 20, 30, 40]) last = await d.beat(s, { after: 0, position });
     expect(last.body.watchedSeconds).toBe(0);
     expect(last.body.watchedPct).toBeLessThan(75);
     expect(await rewardRows()).toEqual([]);
+  });
+
+  it('still counts a beat that lands right after a delayed one', async () => {
+    // Beats every 5s, the network holds one back: it arrives together with the next.
+    const s = (await d.start({ source: '3speak', viewer: 'viewer1' })).body;
+    await d.beat(s, { after: 5000, position: 5 });
+    await d.beat(s, { after: 9900, position: 10 });
+    const late = await d.beat(s, { after: 100, position: 15 });
+    expect(late.body.contentSeconds).toBe(15);
+  });
+
+  it('counts normal playback again once real time has caught up with a burst', async () => {
+    const s = (await d.start({ source: '3speak', viewer: 'viewer1' })).body;
+    await d.beat(s, { after: 0, position: 10 });
+    await d.beat(s, { after: 0, position: 20 }); // not counted: no time has passed
+    let last;
+    for (const position of [25, 30, 35, 40]) last = await d.beat(s, { after: 5000, position });
+    expect(last.body.contentSeconds).toBe(30);
   });
 });
 
