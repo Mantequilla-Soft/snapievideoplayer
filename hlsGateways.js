@@ -8,9 +8,12 @@
  * upload to and has every file, with CORS.
  *
  * So before /hls hands out a media playlist it asks the playlist's own gateway for
- * the LAST segment (the one least likely to be cached). If that does not answer
- * quickly and a fallback gateway does, every segment in the playlist points at the
- * fallback. The answer is kept per CID, so the other renditions of the same video
+ * the start of the LAST segment (the one least likely to be cached) and times it.
+ * Bunny does not always go silent: it may send the first bytes at once and then
+ * trickle at ~35 KB/s, so the probe reads PROBE_BYTES, not one byte, and a gateway
+ * that cannot deliver them in time counts as failing. If the fallback does, every
+ * segment in the playlist points at the fallback. Both are asked at once, so a
+ * slow pair delays the playlist by the fallback's limit, not the sum. The answer is kept per CID, so the other renditions of the same video
  * agree without probing again.
  */
 
@@ -21,9 +24,20 @@ const envMs = (name, fallback) => {
   return Number.isFinite(n) && n >= 500 ? n : fallback;
 };
 
+// Enough to tell a working gateway (~1 MB/s and up) from a trickle (tens of KB/s)
+// within the probe's time (see probeMs below).
+const PROBE_BYTES = (() => {
+  const n = Number(process.env.SEGMENT_PROBE_BYTES);
+  return Number.isFinite(n) && n >= 1024 ? Math.floor(n) : 256 * 1024;
+})();
+
 const DEFAULTS = {
-  probeMs: envMs('SEGMENT_PROBE_TIMEOUT_MS', 3000),
-  fallbackProbeMs: envMs('SEGMENT_FALLBACK_PROBE_TIMEOUT_MS', 8000),
+  // A cached segment answers in ~0.1s; 1.5s for PROBE_BYTES is ~170 KB/s, below
+  // what even 480p needs to play (1.8 Mbps), so a trickling gateway fails it.
+  probeMs: envMs('SEGMENT_PROBE_TIMEOUT_MS', 1500),
+  // Runs at the same time as the first probe, so this caps the wait for the
+  // playlist when both gateways are slow.
+  fallbackProbeMs: envMs('SEGMENT_FALLBACK_PROBE_TIMEOUT_MS', 4000),
   cacheMs: 10 * 60 * 1000,
   // Nothing answered: keep the playlist's own gateway, but look again soon.
   missCacheMs: 60 * 1000,
@@ -51,19 +65,30 @@ function cidOf(url) {
   return m ? m[1] : null;
 }
 
-// True when the gateway starts sending the file within `timeoutMs`. One byte is
-// asked for, and the body is dropped as soon as the headers are in.
-async function probe(url, timeoutMs, fetchImpl) {
+// True when the gateway delivers the first `bytes` of the file (or all of a
+// smaller one) within `timeoutMs`. A gateway that ignores Range and sends the
+// whole file is cut off once enough has arrived.
+async function probe(url, timeoutMs, fetchImpl, bytes = PROBE_BYTES) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let reader = null;
   try {
-    const r = await fetchImpl(url, { redirect: 'follow', signal: ac.signal, headers: { Range: 'bytes=0-0' } });
-    try { await r.body?.cancel?.(); } catch (_) { /* nothing to free */ }
-    return r.ok;
+    const r = await fetchImpl(url, { redirect: 'follow', signal: ac.signal, headers: { Range: `bytes=0-${bytes - 1}` } });
+    if (!r.ok) return false;
+    if (!r.body?.getReader) return true; // nothing to time; the headers came in time
+    reader = r.body.getReader();
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return true;
+      got += value ? value.byteLength : 0;
+      if (got >= bytes) return true;
+    }
   } catch (_) {
-    return false;
+    return false; // includes the abort when time ran out mid-body
   } finally {
     clearTimeout(timer);
+    if (reader) { try { await reader.cancel(); } catch (_) { /* already closed */ } }
   }
 }
 
@@ -82,6 +107,7 @@ function createSegmentGatewayPicker(opts = {}) {
     cacheMs = DEFAULTS.cacheMs,
     missCacheMs = DEFAULTS.missCacheMs,
     maxEntries = DEFAULTS.maxEntries,
+    probeBytes = PROBE_BYTES,
     now = Date.now,
   } = opts;
   const cache = new Map(); // cid -> { gateway, until }
@@ -105,13 +131,19 @@ function createSegmentGatewayPicker(opts = {}) {
     const known = cache.get(cid);
     if (known && known.until > now()) return known.gateway;
 
-    if (await probe(target, probeMs, fetchImpl)) {
+    // All probes start together: the playlist waits at most the longest limit,
+    // not their sum. The playlist's own gateway still wins whenever it passes.
+    const ownOk = probe(target, probeMs, fetchImpl, probeBytes);
+    const others = fallbacks
+      .filter((g) => g !== own)
+      .map((g) => probe(g + target.slice(own.length), fallbackProbeMs, fetchImpl, probeBytes).then((ok) => (ok ? g : null)));
+    if (await ownOk) {
       remember(cid, own, cacheMs);
       return own;
     }
-    for (const g of fallbacks) {
-      if (g === own) continue;
-      if (await probe(g + target.slice(own.length), fallbackProbeMs, fetchImpl)) {
+    for (const next of others) {
+      const g = await next;
+      if (g) {
         remember(cid, g, cacheMs);
         return g;
       }
@@ -123,6 +155,7 @@ function createSegmentGatewayPicker(opts = {}) {
 
 module.exports = {
   SEGMENT_FALLBACK_GATEWAYS,
+  PROBE_BYTES,
   isMediaPlaylist,
   lastSegmentRef,
   gatewayOf,

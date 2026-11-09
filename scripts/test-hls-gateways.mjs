@@ -29,7 +29,26 @@ const MEDIA = [
 ].join('\n');
 const MASTER = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1800000\n480p/index.m3u8\n';
 
-function fakeFetch(answers) {
+// Bodies stream in 1 KB chunks: 'ok' sends them at once, 'trickle' sends one
+// chunk and then nothing until the probe gives up.
+function body(mode, signal, size) {
+  let sent = 0;
+  return {
+    getReader: () => ({
+      read: () => {
+        if (sent >= size) return Promise.resolve({ done: true });
+        if (mode === 'trickle' && sent > 0) {
+          return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
+        }
+        sent += 1024;
+        return Promise.resolve({ done: false, value: new Uint8Array(1024) });
+      },
+      cancel: async () => {},
+    }),
+  };
+}
+
+function fakeFetch(answers, size = 64 * 1024) {
   const calls = [];
   const fn = (url, opts) => {
     calls.push({ url, range: opts?.headers?.Range });
@@ -37,12 +56,13 @@ function fakeFetch(answers) {
     if (a === 'hang') {
       return new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(new Error('aborted'))));
     }
-    return Promise.resolve({ ok: a === 'ok', status: a === 'ok' ? 206 : 502, body: { cancel: async () => {} } });
+    const ok = a !== 'fail';
+    return Promise.resolve({ ok, status: ok ? 206 : 502, body: body(a, opts.signal, size) });
   };
   fn.calls = calls;
   return fn;
 }
-const fast = { probeMs: 30, fallbackProbeMs: 30 };
+const fast = { probeMs: 30, fallbackProbeMs: 30, probeBytes: 8 * 1024 };
 
 console.log('── helpers ──');
 is('media playlist recognised', isMediaPlaylist(MEDIA), true);
@@ -57,9 +77,10 @@ console.log('── choosing ──');
   const f = fakeFetch({});
   const pick = createSegmentGatewayPicker({ ...fast, fetchImpl: f });
   is('healthy Bunny keeps Bunny', await pick(PLAYLIST, MEDIA), BCDN);
-  is('…after probing the LAST segment, one byte', f.calls, [{ url: `${BCDN}/ipfs/${CID}/480p/480p_2.ts`, range: 'bytes=0-0' }]);
+  is('…after probing the start of the LAST segment', f.calls[0], { url: `${BCDN}/ipfs/${CID}/480p/480p_2.ts`, range: 'bytes=0-8191' });
+  is('…with ipfs-audio asked at the same time', f.calls[1].url, `${AUDIO}/ipfs/${CID}/480p/480p_2.ts`);
   await pick(`${BCDN}/ipfs/${CID}/720p/index.m3u8`, MEDIA);
-  is('another rendition of that CID is not probed again', f.calls.length, 1);
+  is('another rendition of that CID is not probed again', f.calls.length, 2);
 }
 {
   const f = fakeFetch({ [`${BCDN}/ipfs/${CID}/480p/480p_2.ts`]: 'hang' });
@@ -68,6 +89,30 @@ console.log('── choosing ──');
   is('…probed ipfs-audio at the same path', f.calls[1].url, `${AUDIO}/ipfs/${CID}/480p/480p_2.ts`);
   is('the choice holds for the CID', await pick(`${BCDN}/ipfs/${CID}/720p/index.m3u8`, MEDIA), AUDIO);
   is('…without probing again', f.calls.length, 2);
+}
+{
+  // 2026-11-09: Bunny sent the first bytes of 480p_2.ts at once, then ~35 KB/s.
+  const f = fakeFetch({ [`${BCDN}/ipfs/${CID}/480p/480p_2.ts`]: 'trickle' });
+  const pick = createSegmentGatewayPicker({ ...fast, fetchImpl: f });
+  is('Bunny trickling after the first bytes → ipfs-audio', await pick(PLAYLIST, MEDIA), AUDIO);
+}
+{
+  // Both slow: the wait is the longer limit, not the two added up.
+  const f = fakeFetch({
+    [`${BCDN}/ipfs/${CID}/480p/480p_2.ts`]: 'hang',
+    [`${AUDIO}/ipfs/${CID}/480p/480p_2.ts`]: 'hang',
+  });
+  const pick = createSegmentGatewayPicker({ fetchImpl: f, probeMs: 150, fallbackProbeMs: 200, probeBytes: 8 * 1024 });
+  const t0 = Date.now();
+  const g = await pick(PLAYLIST, MEDIA);
+  const took = Date.now() - t0;
+  is('both silent → keep Bunny', g, BCDN);
+  is('…after the longer limit, not the sum (<300ms)', took < 300, true);
+}
+{
+  const f = fakeFetch({}, 2 * 1024);
+  const pick = createSegmentGatewayPicker({ ...fast, fetchImpl: f });
+  is('a segment smaller than the probe counts once it is all in', await pick(PLAYLIST, MEDIA), BCDN);
 }
 {
   const f = fakeFetch({ [`${BCDN}/ipfs/${CID}/480p/480p_2.ts`]: 'fail' });
@@ -103,7 +148,7 @@ console.log('── choosing ──');
   const pick = createSegmentGatewayPicker({ ...fast, fetchImpl: f, maxEntries: 2 });
   for (const c of ['QmA', 'QmB', 'QmC']) await pick(`${BCDN}/ipfs/${c}/480p/index.m3u8`, MEDIA);
   await pick(`${BCDN}/ipfs/QmA/480p/index.m3u8`, MEDIA);
-  is('the cache is bounded (oldest dropped, probed again)', f.calls.length, 4);
+  is('the cache is bounded (oldest dropped, probed again)', f.calls.length, 8);
 }
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
