@@ -70,6 +70,35 @@ describe('GET /hls: input guard', () => {
     expect(res.text).toBe('bad manifest url');
     expect(f).not.toHaveBeenCalled();
   });
+
+  it('never contacts a host outside the gateway list, but serves the same object from ours', async () => {
+    const f = gateways({ [at(HOT, 'manifest.m3u8')]: MASTER });
+    const res = await request(app).get(`/hls?u=${enc(`https://attacker.example/ipfs/${CID}/manifest.m3u8`)}`);
+    expect(calledUrls(f).some((u) => !u.startsWith(`${HOT}/`) && !u.startsWith(`${BCDN}/`)
+      && !u.startsWith(`${SUPER}/`) && !u.startsWith(`${AUDIO}/`))).toBe(false);
+    expect(calledUrls(f)[0]).toBe(at(HOT, 'manifest.m3u8'));
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/^#EXTM3U/);
+  });
+
+  it('tries a configured IPFS_GATEWAY host first', async () => {
+    const f = gateways({ [`https://gw.test/ipfs/${CID}/manifest.m3u8`]: MASTER });
+    const res = await request(app).get(`/hls?u=${enc(`https://gw.test/ipfs/${CID}/manifest.m3u8`)}`);
+    expect(res.status).toBe(200);
+    expect(calledUrls(f)[0]).toBe(`https://gw.test/ipfs/${CID}/manifest.m3u8`);
+  });
+
+  it.each([
+    ['..', '../api/v0/manifest.m3u8'],
+    ['encoded ..', '%2e%2e/api/v0/manifest.m3u8'],
+    ['deep ..', `${CID}/../../api/v0/manifest.m3u8`],
+  ])('400 for a path that climbs out of /ipfs/ (%s), without fetching anything', async (_label, path) => {
+    const f = installFetch();
+    const res = await request(app).get(`/hls?u=${enc(`${HOT}/ipfs/${path}`)}`);
+    expect(res.status).toBe(400);
+    expect(res.text).toBe('bad manifest url');
+    expect(f).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /hls: master manifest from the hot zone', () => {
@@ -279,6 +308,33 @@ describe('GET /ipfs-proxy', () => {
   ])('400 for %s', async (_label, qs) => {
     const f = installFetch();
     const res = await request(app).get(`/ipfs-proxy${qs}`);
+    expect(res.status).toBe(400);
+    expect(res.text).toBe('bad ipfs url');
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it('never proxies bytes from a host outside the gateway list', async () => {
+    const f = installFetch((url) => (url.startsWith('https://attacker.example/') ? text('secret') : text('gone', 404)));
+    const res = await request(app).get(`/ipfs-proxy?u=${enc('https://attacker.example/ipfs/x/a.ts')}`);
+    expect(calledUrls(f).some((u) => u.startsWith('https://attacker.example/'))).toBe(false);
+    expect(res.status).toBe(502);
+    expect(res.text).not.toContain('secret');
+  });
+
+  it('serves an object named on an unknown host from our gateways instead', async () => {
+    const f = installFetch((url) => (url === at(SUPER, '480p/a.ts') ? text('bytes') : text('gone', 404)));
+    const res = await request(app).get(`/ipfs-proxy?u=${enc(`https://elsewhere.example/ipfs/${CID}/480p/a.ts`)}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('video/mp2t');
+    expect(calledUrls(f).every((u) => !u.startsWith('https://elsewhere.example/'))).toBe(true);
+  });
+
+  it.each([
+    ['..', '../api/v0/cat'],
+    ['encoded ..', '%2E%2E/api/v0/cat'],
+  ])('400 for a path that climbs out of /ipfs/ (%s), without fetching anything', async (_label, path) => {
+    const f = installFetch();
+    const res = await request(app).get(`/ipfs-proxy?u=${enc(`${SUPER}/ipfs/${path}`)}`);
     expect(res.status).toBe(400);
     expect(res.text).toBe('bad ipfs url');
     expect(f).not.toHaveBeenCalled();

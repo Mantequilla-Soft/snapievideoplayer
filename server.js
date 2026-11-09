@@ -345,6 +345,34 @@ const HLS_GATEWAYS = [
 const NON_CORS_GATEWAYS = [
   'https://ipfs.3speak.tv',
 ];
+// Hosts /hls and /ipfs-proxy may fetch from: the gateways above plus the configured
+// IPFS_GATEWAY / IPFS_GATEWAY_FALLBACK. Matching only the URL's SHAPE is not enough:
+// `https://<any host>/ipfs/...` would make this server fetch any host and, through
+// /ipfs-proxy, serve its bytes from our origin.
+const hostOf = (u) => { try { return new URL(u).hostname.toLowerCase(); } catch (_) { return null; } };
+const PROXY_GATEWAY_HOSTS = new Set(
+  [...HLS_GATEWAYS, process.env.IPFS_GATEWAY, process.env.IPFS_GATEWAY_FALLBACK].map(hostOf).filter(Boolean)
+);
+
+// The gateway URLs to try for one IPFS object, the named gateway first. The path after
+// /ipfs/ is gateway-independent, so a URL on a gateway we do not know is still served
+// from ours; that host itself is never contacted. Every candidate must still sit under
+// /ipfs/ once parsed, so `..` cannot climb out to another path on a gateway.
+function gatewayCandidates(upstream) {
+  const cidPath = upstream.replace(/^https:\/\/[^/]+\/ipfs\//i, '');
+  const named = upstream.replace(/\/ipfs\/.*$/i, '');
+  const bases = PROXY_GATEWAY_HOSTS.has(hostOf(named)) ? [named, ...HLS_GATEWAYS] : HLS_GATEWAYS;
+  const candidates = [];
+  for (const gwBase of bases) {
+    const u = `${gwBase}/ipfs/${cidPath}`;
+    let parsed;
+    try { parsed = new URL(u); } catch (_) { continue; }
+    if (!parsed.pathname.startsWith('/ipfs/') || !PROXY_GATEWAY_HOSTS.has(parsed.hostname.toLowerCase())) continue;
+    if (!candidates.includes(u)) candidates.push(u);
+  }
+  return { cidPath, candidates };
+}
+
 // How long to wait for a gateway to return the master manifest before treating it as
 // unavailable. The file itself is only a couple KB, but a video that has migrated to
 // COLD IPFS can need a while to resolve the CID the first time (DHT lookup + fetch) —
@@ -393,13 +421,8 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
     return res.status(400).send('bad manifest url');
   }
   // The path after /ipfs/ (CID + file) is gateway-independent — try it everywhere.
-  const cidPath = upstream.replace(/^https:\/\/[^/]+\/ipfs\//i, '');
-  const seen = new Set();
-  const candidates = [];
-  for (const gwBase of [upstream.replace(/\/ipfs\/.*$/i, ''), ...HLS_GATEWAYS]) {
-    const u = `${gwBase}/ipfs/${cidPath}`;
-    if (!seen.has(u)) { seen.add(u); candidates.push(u); }
-  }
+  const { candidates } = gatewayCandidates(upstream);
+  if (!candidates.length) return res.status(400).send('bad manifest url');
 
   const fetchManifest = async (u) => {
     const ac = new AbortController();
@@ -525,9 +548,9 @@ app.get('/seg/:name', async (req, res) => {
  * `Access-Control-Allow-Origin`. Only ever reached when /hls could not find a
  * CORS-capable gateway (see childUrl there); a healthy CDN bypasses it entirely.
  *
- * Same SSRF guard as /hls: an https URL under an /ipfs/ path, nothing else. The path
- * after /ipfs/ is gateway-independent, so if the named gateway fails we can retry the
- * identical object elsewhere — useful right now, with two of four gateways refusing
+ * Same guard as /hls: an https URL under an /ipfs/ path, fetched only from our own
+ * gateways (gatewayCandidates). The path after /ipfs/ is gateway-independent, so if the
+ * named gateway fails we can retry the identical object elsewhere — useful right now, with two of four gateways refusing
  * to serve at all.
  *
  * The body is piped, never buffered: a 2 MB segment must not become 2 MB of heap per
@@ -553,13 +576,8 @@ app.get('/ipfs-proxy', async (req, res) => {
     return res.status(400).send('bad ipfs url');
   }
 
-  const cidPath = upstream.replace(/^https:\/\/[^/]+\/ipfs\//i, '');
-  const seen = new Set();
-  const candidates = [];
-  for (const gwBase of [upstream.replace(/\/ipfs\/.*$/i, ''), ...HLS_GATEWAYS]) {
-    const u = `${gwBase}/ipfs/${cidPath}`;
-    if (!seen.has(u)) { seen.add(u); candidates.push(u); }
-  }
+  const { cidPath, candidates } = gatewayCandidates(upstream);
+  if (!candidates.length) return res.status(400).send('bad ipfs url');
 
   // Range matters: hls.js issues byte-range requests for #EXT-X-BYTERANGE media and
   // the player seeks with them. Dropping it would turn a seek into a full re-download.
