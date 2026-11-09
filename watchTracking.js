@@ -231,6 +231,66 @@ const SESSION_SECRET = crypto.randomBytes(32);
 
 const ID_RE = /^[a-z0-9._-]+$/i;
 
+/* ─── live streams (owner, 2026-11-09) ────────────────────────────────────
+ * Watching a live stream on 3speak.tv earns from the same viewer pool as videos,
+ * paid as 'stream-viewer'. A stream has no length, so the video rule (75% of the
+ * timeline) cannot apply. Instead:
+ *
+ *   counted       only seconds the SERVER times between beats, only while the tab
+ *                 is on screen, and only while the stream is really live.
+ *   qualifies     at AD_STREAM_VIEWER_MIN_SECONDS on screen (5 min).
+ *   capped        at AD_STREAM_VIEWER_MAX_SECONDS per stream (20 min, as a video).
+ *   one row       per (viewer, host, room, go-live time), upserted with $max, so
+ *                 two tabs do not stack and a reused room name is a new stream.
+ *
+ * 🚨 The room is checked against the streaming server (GET /rooms/:name): it must
+ * exist, be a stream (not a conference room), be hosted by the account named, and
+ * be broadcasting. Without that check anyone could invent room names and bank 20
+ * minutes against each. Fails CLOSED: a lookup that errors credits nothing.
+ */
+const LIVE_ROOM_APIS = String(process.env.LIVE_ROOM_API_URLS || 'https://live.3speak.tv')
+  .split(',').map((u) => u.trim().replace(/\/+$/, '')).filter(Boolean);
+const LIVE_MIN_SECONDS = parseInt(process.env.AD_STREAM_VIEWER_MIN_SECONDS, 10) || 300;
+const LIVE_MAX_SECONDS = parseInt(process.env.AD_STREAM_VIEWER_MAX_SECONDS, 10) || VIEWER_MAX_SECONDS;
+// How long one answer about a room is trusted. Every beat of every viewer asks, so
+// without this a popular stream would hit the streaming server several times a
+// second; a minute means a stream that ended stops counting within a minute.
+const LIVE_ROOM_TTL_MS = 60 * 1000;
+const LIVE_ROOM_ERROR_TTL_MS = 10 * 1000;
+// A live session has no length to scale its lifetime by: it lives while beats come.
+const LIVE_SESSION_IDLE_MS = 10 * 60 * 1000;
+const liveRoomCache = new Map();
+
+/** { liveAt } when `room` is a stream hosted by `host` that is live now, else null. */
+async function liveRoom(host, room) {
+  const key = `${host}/${room}`;
+  const hit = liveRoomCache.get(key);
+  if (hit && hit.exp > Date.now()) return hit.value;
+  let value = null;
+  let failed = false;
+  for (const base of LIVE_ROOM_APIS) {
+    try {
+      const r = await fetch(`${base}/rooms/${encodeURIComponent(room)}`, { signal: AbortSignal.timeout(3000) });
+      if (r.status === 404) continue;            // not on this server; try the next
+      if (!r.ok) { failed = true; continue; }
+      const m = await r.json();
+      if (m && m.mode === 'standalone' && String(m.host || '').toLowerCase() === host
+        && m.broadcasting === true && typeof m.liveAt === 'string' && m.liveAt) {
+        value = { liveAt: m.liveAt };
+      }
+      failed = false;
+      break;
+    } catch {
+      failed = true;
+    }
+  }
+  if (liveRoomCache.size > 5000) {
+    for (const [k, v] of liveRoomCache) if (v.exp <= Date.now()) liveRoomCache.delete(k);
+  }
+  liveRoomCache.set(key, { value, exp: Date.now() + (failed ? LIVE_ROOM_ERROR_TTL_MS : LIVE_ROOM_TTL_MS) });
+  return value;
+}
+
 let indexesEnsured = false;
 async function ensureIndexes() {
   if (indexesEnsured) return;
@@ -375,6 +435,35 @@ function normalizeSource(s) {
 }
 
 /**
+ * Who is watching, and through which app, for the reward ledger.
+ *
+ * A partner-signed token both NAMES the viewer and says which app did it, so the
+ * `source` recorded is the one that actually signed rather than whatever the body
+ * claimed. That is what makes a row attributable and an app revocable.
+ *
+ * 🚨 An unsigned name is honoured ONLY for 3speak.tv, whose frontend cannot hold a
+ * secret and whose exposure the owner has weighed. Anything else naming a viewer
+ * without a signature is dropped to anonymous: the session still tracks, the video
+ * still plays, nobody's ledger is written to.
+ */
+function resolveIdentity(req, owner, permlinks) {
+  let source = normalizeSource(req.body?.source);
+  // Who is watching, and ONLY when they have opted into rewards. The client sends
+  // it, but the opt-in is re-checked against the database before a single
+  // identified row is written: a client asserting somebody's name must never be
+  // enough to start storing their viewing.
+  let viewer = viewerName(req.body?.viewer);
+  const signed = verifyViewerToken(req.body?.viewerToken, { owner, permlinks });
+  if (signed) {
+    viewer = signed.viewer;
+    source = signed.app;
+  } else if (viewer && (TOKEN_REQUIRED || source !== '3speak')) {
+    viewer = null;
+  }
+  return { viewer, source };
+}
+
+/**
  * POST /api/watch/start — open a measured watch session.
  * body: { owner, permlink, type: 'legacy'|'embed', duration?, position? }
  * `duration` (player.duration()) is preferred for %/heatmap alignment; `position`
@@ -390,6 +479,9 @@ async function watchStart(req, res) {
     if (!ID_RE.test(owner) || !ID_RE.test(permlink)) {
       return res.status(400).json({ error: 'Invalid owner/permlink' });
     }
+    // A live stream: owner = the host, permlink = the room. Its own path, because
+    // nothing below (duration, heatmap, view-durations) means anything for one.
+    if (req.body?.type === 'live') return await liveWatchStart(req, res, owner.toLowerCase(), permlink);
 
     const video = type === 'legacy'
       ? await db.findLegacyVideo(owner, permlink)
@@ -464,29 +556,9 @@ async function watchStart(req, res) {
     const sid = crypto.randomBytes(16).toString('hex');
     const durationMs = Math.round(duration * 1000);
     const startPosition = clampPos(req.body?.position, heatmapDuration);
-    // Where the view happened: 'player' (embed iframe) | '3speak' (native site).
-    let source = normalizeSource(req.body?.source);
-    // Who is watching, and ONLY when they have opted into rewards. The client
-    // sends it, but the opt-in is re-checked against the database below before a
-    // single identified row is written — a client asserting somebody's name must
-    // never be enough to start storing their viewing.
-    let viewer = viewerName(req.body?.viewer);
-    /* A partner-signed token both NAMES the viewer and says which app did it, so the
-     * `source` recorded is the one that actually signed rather than whatever the body
-     * claimed. That is what makes a row attributable and an app revocable. */
-    const signed = verifyViewerToken(req.body?.viewerToken, {
-      owner, permlinks: [permlink, keyPermlink],
-    });
-    if (signed) {
-      viewer = signed.viewer;
-      source = signed.app;
-    } else if (viewer && (TOKEN_REQUIRED || source !== '3speak')) {
-      /* 🚨 An unsigned name is honoured ONLY for 3speak.tv, whose frontend cannot hold
-       * a secret and whose exposure the owner has weighed. Anything else naming a
-       * viewer without a signature is dropped to anonymous: the session still tracks,
-       * the video still plays, nobody's ledger is written to. */
-      viewer = null;
-    }
+    // Where the view happened: 'player' (embed iframe) | '3speak' (native site),
+    // and who is watching (see resolveIdentity).
+    const { viewer, source } = resolveIdentity(req, owner, [permlink, keyPermlink]);
     // An incubating viewer, who has no Hive name to be the `viewer` above. Held
     // on the session for the same reason: the credit is decided from beats we
     // time ourselves, so the identity has to be fixed when the session opens.
@@ -559,6 +631,7 @@ async function watchBeat(req, res) {
     if (!tokenMatches(token, sessionToken(sid, s.owner, s.permlink))) {
       return res.status(403).json({ error: 'bad_token' });
     }
+    if (s.type === 'live') return await liveWatchBeat(req, res, database, s);
 
     const now = Date.now();
     const gap = Math.max(0, now - new Date(s.lastBeatAt).getTime());
@@ -669,6 +742,119 @@ async function watchBeat(req, res) {
   } catch (error) {
     console.error('Error recording watch beat:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * POST /api/watch/start with type 'live': open a session on a live stream.
+ * body: { owner: host, permlink: room, type: 'live', source, viewer?, viewerToken?, private? }
+ * Answers { tracked: false, reason: 'not_live' } unless the room is a stream by
+ * that host that is broadcasting right now (see liveRoom).
+ */
+async function liveWatchStart(req, res, host, room) {
+  const stream = await liveRoom(host, room);
+  if (!stream) return res.json({ tracked: false, reason: 'not_live' });
+
+  const { viewer, source } = resolveIdentity(req, host, [room]);
+  const isPrivate = req.body?.private === true || req.body?.private === 'true';
+  const sid = crypto.randomBytes(16).toString('hex');
+  const now = new Date();
+  await db.getDb().collection(SESSION_COLLECTION).insertOne({
+    sid,
+    owner: host,
+    permlink: room,
+    type: 'live',
+    // Which go-live this is. A beat after the room went live AGAIN (same name, new
+    // stream) is not this session's stream and credits nothing.
+    streamAt: stream.liveAt,
+    source,
+    viewer: viewer || null,
+    private: isPrivate,
+    liveMs: 0,           // seconds on screen while live, timed here, never claimed
+    startedAt: now,
+    lastBeatAt: now,
+    expiresAt: new Date(now.getTime() + LIVE_SESSION_IDLE_MS),
+  });
+  return res.json({ sid, token: sessionToken(sid, host, room), beatSeconds: BEAT_SECONDS, live: true });
+}
+
+/**
+ * POST /api/watch/beat on a live session. body: { sid, token, hidden? }
+ * Credits the real time since the last beat (clamped), only while the tab is on
+ * screen and the stream is still the one this session opened on.
+ */
+async function liveWatchBeat(req, res, database, s) {
+  const now = Date.now();
+  const gap = Math.max(0, now - new Date(s.lastBeatAt).getTime());
+  const hidden = req.body?.hidden === true || req.body?.hidden === 'true';
+  const stream = hidden ? null : await liveRoom(s.owner, s.permlink);
+  const stillLive = !!stream && stream.liveAt === s.streamAt;
+  const credit = !hidden && stillLive ? Math.min(gap, MAX_BEAT_CREDIT_MS) : 0;
+  const liveMs = (Number(s.liveMs) || 0) + credit;
+
+  await database.collection(SESSION_COLLECTION).updateOne(
+    { sid: s.sid },
+    { $set: { liveMs, lastBeatAt: new Date(now), expiresAt: new Date(now + LIVE_SESSION_IDLE_MS) } },
+  );
+
+  const liveSeconds = Math.round(liveMs / 1000);
+  await recordStreamViewerReward(database, s, liveSeconds, viewerIpHashes(clientIp(req)));
+  return res.json({ live: true, liveSeconds, counting: credit > 0, qualifies: liveSeconds >= LIVE_MIN_SECONDS });
+}
+
+/**
+ * Bank a qualifying live-stream watch toward the viewer's share of ad revenue,
+ * paid as 'stream-viewer' (the checker reads `live: true`).
+ *
+ * The video rules that carry over, each load-bearing: opted in (re-read, never
+ * trusted), source on the allowlist, not private, not the host. The video % bar
+ * is replaced by LIVE_MIN_SECONDS on screen, and the cap by LIVE_MAX_SECONDS.
+ *
+ * 🚨 `permlink` on the row is `<room>#live-<go-live ms>`, not the room alone. The
+ * ledger is unique on (viewer, owner, permlink): the room alone would merge a
+ * reused room name's next stream into this one (and, once paid, never pay again),
+ * and could collide with a video of the same permlink. '#' never appears in a
+ * Hive permlink, so a stream row can never be a video's. `room` and `streamAt`
+ * are kept as their own fields for reporting.
+ *
+ * Failure is swallowed: a reward ledger must never break the tracking it hangs off.
+ */
+async function recordStreamViewerReward(database, s, liveSeconds, ipHashes = {}) {
+  try {
+    const viewer = viewerName(s.viewer);
+    if (!viewer) return;
+    if (!VIEWER_REWARD_SOURCES.has(s.source)) return;
+    if (s.private) return;
+    if (viewer === String(s.owner || '').toLowerCase()) return;
+    if (!(liveSeconds >= LIVE_MIN_SECONDS)) return;
+
+    const opted = await database.collection(VIEWER_PREFS_COLLECTION)
+      .findOne({ _id: viewer }, { projection: { rewardsEnabled: 1 } });
+    if (!opted || opted.rewardsEnabled !== true) return;
+
+    const seconds = Math.min(Math.round(liveSeconds), LIVE_MAX_SECONDS);
+    const streamMs = Date.parse(s.streamAt);
+    if (!Number.isFinite(streamMs)) return;
+
+    await database.collection(VIEWER_WATCH_COLLECTION).updateOne(
+      { viewer, owner: s.owner, permlink: `${s.permlink}#live-${streamMs}` },
+      {
+        $max: { contentSeconds: seconds },
+        $set: {
+          at: new Date(),
+          ...(ipHashes.viewer_ip_hash
+            ? { viewer_ip_hash: ipHashes.viewer_ip_hash, viewer_net_hash: ipHashes.viewer_net_hash }
+            : {}),
+        },
+        $setOnInsert: {
+          payoutId: null, firstAt: new Date(), app: s.source || '3speak',
+          live: true, room: s.permlink, streamAt: new Date(streamMs),
+        },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    console.error('[stream-viewer-reward] not recorded:', err && err.message);
   }
 }
 
@@ -866,4 +1052,4 @@ async function recordIncubationWatch(database, s, { contentSeconds }) {
   }
 }
 
-module.exports = { watchStart, watchBeat, getHeatmap };
+module.exports = { watchStart, watchBeat, getHeatmap, _liveRoomCache: liveRoomCache };
