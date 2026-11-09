@@ -653,12 +653,19 @@ async function watchBeat(req, res) {
     const incs = {};
     let contentMs = s.contentMs || 0;
     let visibleContentMs = s.visibleContentMs || 0;
+    // The 12s floor above is for a beat that lands right after a delayed one: its own
+    // gap is tiny but the playhead really moved. It must not let beats sent back to
+    // back bank content with no time passing, so the session as a whole may never
+    // count more content than 2.5x the real time since it started (+ the same 12s).
+    const sinceStartMs = Math.max(0, now - new Date(s.startedAt).getTime());
+    const contentBudgetMs = Number.isFinite(sinceStartMs) ? sinceStartMs * 2.5 + 12000 - contentMs : Infinity;
     // Absent means visible. An older player build does not send this field, and
     // treating its beats as background would silently stop crediting watch time
     // for every viewer on it -- a far worse failure than counting some.
     const beatHidden = req.body?.hidden === true || req.body?.hidden === 'true';
     const covered = new Set(Array.isArray(s.coveredBuckets) ? s.coveredBuckets : []);
-    if (durSec > 0 && curPos >= lastPos && (curPos - lastPos) <= contiguousMax) {
+    if (durSec > 0 && curPos >= lastPos && (curPos - lastPos) <= contiguousMax
+        && (curPos - lastPos) * 1000 <= contentBudgetMs) {
       // Content consumed = playhead advance. This is SPEED-CORRECT: at 1.5x the
       // playhead moves 1.5x faster, so more content accrues per wall-second —
       // exactly the fix for fast playback under-counting watch progress.
