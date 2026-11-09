@@ -20,8 +20,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test
-        run: npm test
+      - name: Test (legacy scripts)
+        run: npm run test:legacy
+
+      - name: Test (Vitest, with coverage floor)
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build
