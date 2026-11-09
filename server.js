@@ -218,6 +218,7 @@ async function isEndedStreamPost(author, permlink) {
  * post shows within five minutes), a failed one only briefly so a node blip is not
  * remembered as "this post has no timeline". Concurrent requests share one fetch. */
 const { sanitizeTimeline, isAccount: isHiveAccount, isPermlink: isHivePermlink } = require('./timeline');
+const { createSegmentGatewayPicker, isMediaPlaylist, gatewayOf } = require('./hlsGateways');
 
 const TIMELINE_TTL_MS = 5 * 60 * 1000;
 const TIMELINE_FAIL_TTL_MS = 30 * 1000;
@@ -374,10 +375,20 @@ const HLS_FETCH_TIMEOUT_MS = (() => {
  *     stall that could hang ~70s each and hide the "video no longer available" state
  *     behind a minutes-long spinner.
  *
- * Only the master is proxied; variant/segment refs are absolutised to the WINNING
- * gateway so they load straight from the CDN. Correct manifests pass through
- * byte-for-byte. Fail-open: a rewrite bug 302s to the reachable manifest.
+ * Variant playlists come back through /hls too (3., below); segments are
+ * absolutised so they load straight from a gateway, never through this server
+ * (except the non-CORS case). Fail-open: a rewrite bug 302s to the reachable
+ * manifest.
+ *
+ *  3. SEGMENT GATEWAY: a media playlist's segments point at the gateway that can
+ *     actually serve them (hlsGateways.js). Bunny answers for playlists and the
+ *     first cached segments of an unannounced CID and hangs on the rest, so the
+ *     last segment is probed and ipfs-audio.3speak.tv takes over when Bunny is
+ *     silent. That needs the variants to pass through here, hence the rewrite of
+ *     the master's .m3u8 children.
  */
+const pickSegmentGateway = createSegmentGatewayPicker();
+
 app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
   const upstream = String(req.query.u || '');
   // Only proxy https IPFS-gateway manifests — never an open redirector/SSRF vector.
@@ -439,7 +450,13 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
   }
 
   try {
-    const base = hit.url.slice(0, hit.url.lastIndexOf('/') + 1);
+    let base = hit.url.slice(0, hit.url.lastIndexOf('/') + 1);
+    const media = isMediaPlaylist(hit.text);
+    if (media && corsOk(hit.url)) {
+      const own = gatewayOf(hit.url);
+      const segGateway = await pickSegmentGateway(hit.url, hit.text).catch(() => own);
+      if (own && segGateway && segGateway !== own) base = segGateway + base.slice(own.length);
+    }
     const abs = (u) => { try { return new URL(u, base).href; } catch { return u; } };
 
     // TEMPORARY (2026-09-08) — both BunnyCDN zones are suspended, so the tier-3
@@ -455,7 +472,10 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
     const viaSelf = !corsOk(hit.url);
     const childUrl = (u) => {
       const a = abs(u);
-      if (!viaSelf || !/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(a)) return a;
+      if (!/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(a)) return a;
+      // A master's variant playlists come back through here for the segment
+      // gateway check (3. above).
+      if (!viaSelf) return /\.m3u8(\?|$)/i.test(a) ? `${SELF_BASE}/hls?u=${encodeURIComponent(a)}` : a;
       // A nested playlist goes back through /hls so it gets the same treatment
       // (codec fix + this rewrite) one level down; everything else is bytes.
       return `${SELF_BASE}/${/\.m3u8(\?|$)/i.test(a) ? 'hls' : 'ipfs-proxy'}?u=${encodeURIComponent(a)}`;
