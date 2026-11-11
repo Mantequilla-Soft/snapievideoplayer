@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 require('dotenv').config = () => ({ parsed: {} });
 
 for (const key of Object.keys(process.env)) {
-  if (/SECRET|KEY|TOKEN|PASSWORD|MONGODB_|AD_|INCUBATION_|WATCH_|IP_HASH|PLACEHOLDER_|IPFS_|HIVE_|LIVE_|STREAM_|PUBLIC_BASE_URL|HLS_/.test(key)) {
+  if (/SECRET|KEY|TOKEN|PASSWORD|MONGODB_|AD_|INCUBATION_|WATCH_|IP_HASH|PLACEHOLDER_|IPFS_|S3_|HIVE_|LIVE_|STREAM_|PUBLIC_BASE_URL|HLS_/.test(key)) {
     delete process.env[key];
   }
 }

@@ -407,6 +407,62 @@ describe('GET /api/watch: creator timeline from Hive', () => {
   });
 });
 
+describe('GET /api/watch: storage_state (S3 archive)', () => {
+  const S3_DIRECT = `https://s3.3speak.tv/videos-test/${CID}/manifest.m3u8`;
+  const S3_ZONE = `https://buttercloud.b-cdn.net/videos-test/${CID}/manifest.m3u8`;
+  const s3Hls = (url, route) => `${viaHls(url, route)}&s3=1`;
+  const urls = (body) => [body.videoUrl, body.videoUrlFallback1, body.videoUrlFallback2, body.videoUrlFallback3];
+
+  it('archived: plays from the S3 zone through /hls, host taken from config', async () => {
+    await seedLegacy({ permlink: 's3-archived', storage_state: 'archived', s3_url: S3_DIRECT });
+    const res = await request(app).get('/api/watch?v=badadib/s3-archived');
+    expect(res.status).toBe(200);
+    expect(urls(res.body)).toEqual(Array(4).fill(s3Hls(S3_ZONE)));
+  });
+
+  it('promoting counts as not on the hotnode yet: S3 zone', async () => {
+    await seedLegacy({ permlink: 's3-promoting', storage_state: 'promoting', s3_url: S3_DIRECT });
+    const res = await request(app).get('/api/watch?v=badadib/s3-promoting');
+    expect(res.body.videoUrl).toBe(s3Hls(S3_ZONE));
+  });
+
+  it('hot: the hotnode as before, flagged so /hls can fall back to S3', async () => {
+    await seedLegacy({ permlink: 's3-hot', storage_state: 'hot', s3_url: S3_DIRECT, hot_nodes: ['hotnode-one'] });
+    const res = await request(app).get('/api/watch?v=badadib/s3-hot');
+    expect(urls(res.body)).toEqual(Array(4).fill(s3Hls(MASTER)));
+  });
+
+  it('hot and never archived (no s3_url): exactly as before, no warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await seedLegacy({ permlink: 's3-new', storage_state: 'hot', hot_nodes: ['hotnode-one'] });
+    const res = await request(app).get('/api/watch?v=badadib/s3-new');
+    expect(urls(res.body)).toEqual(Array(4).fill(viaHls(MASTER)));
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('mobile info=true follows the same plan', async () => {
+    await seedLegacy({ permlink: 's3-info', storage_state: 'archived', s3_url: S3_DIRECT });
+    const res = await request(app).get('/api/watch?v=badadib/s3-info&info=true');
+    expect(res.body.cid).toBe(s3Hls(S3_ZONE, 'hls/manifest.m3u8'));
+  });
+
+  it.each([
+    ['another bucket', { storage_state: 'archived', s3_url: `https://s3.3speak.tv/someone-else/${CID}/manifest.m3u8` }],
+    ['another host', { storage_state: 'archived', s3_url: `https://evil.test/videos-test/${CID}/manifest.m3u8` }],
+    ['another CID', { storage_state: 'archived', s3_url: 'https://s3.3speak.tv/videos-test/QmOther/manifest.m3u8' }],
+    ['no s3_url', { storage_state: 'archived' }],
+    ['an unknown state', { storage_state: 'frozen', s3_url: S3_DIRECT }],
+  ])('%s: plays from IPFS exactly as before', async (_label, fields) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await seedLegacy({ permlink: 's3-bad', ...fields });
+    const res = await request(app).get('/api/watch?v=badadib/s3-bad');
+    expect(urls(res.body)).toEqual(Array(4).fill(viaHls(MASTER)));
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
 describe('GET /api/watch: database failure', () => {
   it('500 with a generic error when Mongo is unavailable', async () => {
     const db = serverDb();

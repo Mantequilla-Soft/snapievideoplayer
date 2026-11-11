@@ -22,6 +22,9 @@ NODE_ENV=production
 PORT=3005
 MONGODB_URI=mongodb://username:password@host:port/threespeak
 IPFS_GATEWAY=https://ipfs.3speak.tv/ipfs
+# The one public bucket of 3Speak videos; unset = everything plays from IPFS
+S3_BUCKET=<3speak videos bucket>
+S3_CDN_HOST=buttercloud.b-cdn.net
 ALLOWED_ORIGINS=https://play.3speak.tv,https://3speak.tv
 ```
 
