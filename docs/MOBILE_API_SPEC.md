@@ -81,7 +81,7 @@ Server automatically handles video state:
 
 ## Source Chain (Server-Side Only)
 
-The server picks the source per video from the Mongo `storage_state` the hotnode archiver writes, and `/hls` (manifests) and `/seg` (each segment) fail over in this order:
+The server picks the source per video from the Mongo `storage_state` the hotnode archiver writes. `/hls` fails over between manifest sources in this order:
 
 | `storage_state` | Order |
 |---|---|
@@ -90,6 +90,11 @@ The server picks the source per video from the Mongo `storage_state` the hotnode
 | `archived`, `promoting` | S3 zone (`buttercloud.b-cdn.net`) → `s3.3speak.tv` → IPFS gateways |
 
 IPFS gateways: `hotipfs-3speak-1.b-cdn.net` (hotnode), `ipfs-3speak.b-cdn.net`, `ipfs-audio.3speak.tv`, and `ipfs.3speak.tv` (supernode, last resort). S3 is used only when the server has `S3_BUCKET` set.
+
+`/seg` then fails over each segment from the source the manifest came from:
+- On a Bunny IPFS zone: S3 zone → `s3.3speak.tv` (only when the video has an S3 copy) → `ipfs-audio.3speak.tv`
+- On the S3 zone: `s3.3speak.tv` → `ipfs-audio.3speak.tv`
+- On `s3.3speak.tv` or `ipfs-audio.3speak.tv`: no further fallback (those are the last resorts)
 
 **Mobile app receives one URL.** No fallback URLs needed on client. Server handles availability.
 

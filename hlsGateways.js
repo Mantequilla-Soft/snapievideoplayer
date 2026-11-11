@@ -32,7 +32,21 @@ const SEGMENT_HOSTS = new Set([
 
 const S3_DIRECT_HOST = 's3.3speak.tv';
 const S3_CDN_HOST = (process.env.S3_CDN_HOST || 'buttercloud.b-cdn.net').trim().toLowerCase();
-const S3_BUCKET = /^[a-z0-9][a-z0-9.-]{1,62}$/.test(process.env.S3_BUCKET || '') ? process.env.S3_BUCKET : '';
+// A bad value turns S3 off (everything plays from IPFS), loudly: an archived video
+// may already be gone from IPFS.
+const S3_BUCKET = (() => {
+  const bucket = process.env.S3_BUCKET || '';
+  if (!bucket) return '';
+  if (!/^[a-z0-9][a-z0-9.-]{1,62}$/.test(bucket)) {
+    console.warn(`[storage] S3_BUCKET "${bucket}" is not a bucket name: S3 playback is off`);
+    return '';
+  }
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(S3_CDN_HOST)) {
+    console.warn(`[storage] S3_CDN_HOST "${S3_CDN_HOST}" is not a bare host name: S3 playback is off`);
+    return '';
+  }
+  return bucket;
+})();
 
 const envNum = (name, fallback, min) => {
   const n = Number(process.env[name]);
@@ -152,11 +166,15 @@ function createSegmentRouter(opts = {}) {
   };
 
   // Where else this segment can come from, best first. On the S3 zone: the bucket
-  // itself. On a Bunny IPFS zone: the bucket (if the video has a copy there), then
-  // ipfs-audio. Already on a last resort: nowhere, so it is not probed.
+  // itself, then ipfs-audio. On a Bunny IPFS zone: the bucket (if the video has a
+  // copy there), then ipfs-audio. Already on the bucket or ipfs-audio: nowhere, so
+  // it is not probed (a probe of the bucket is egress that fills no cache).
   function alternatesFor(url, s3) {
     const inBucket = s3Parts(url);
-    if (inBucket) return inBucket.host === S3_CDN_HOST ? [s3Url(S3_DIRECT_HOST, inBucket.cidPath)] : [];
+    if (inBucket) {
+      if (inBucket.host !== S3_CDN_HOST) return [];
+      return [s3Url(S3_DIRECT_HOST, inBucket.cidPath), ...o.fallbacks.map((g) => `${g}/ipfs/${inBucket.cidPath}`)];
+    }
     const own = gatewayOf(url);
     if (!own || o.fallbacks.includes(own)) return [];
     const ipfs = o.fallbacks.map((g) => g + url.slice(own.length));

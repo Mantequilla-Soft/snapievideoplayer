@@ -337,13 +337,30 @@ describe('S3 bucket (issue #54)', () => {
   const s3seg = (base, n) => `${base}/${CID}/480p/480p_${n}.ts`;
   const on = () => requireFresh('hlsGateways.js', { S3_BUCKET: 'videos-test', S3_CDN_HOST: undefined });
 
-  it('is off without S3_BUCKET (or with a bucket name that is not one)', () => {
-    for (const S3_BUCKET of [undefined, '', '../x', 'A Bucket']) {
+  it('is off without S3_BUCKET, quietly', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const S3_BUCKET of [undefined, '']) {
       const mod = requireFresh('hlsGateways.js', { S3_BUCKET });
       expect(mod.S3_BUCKET).toBe('');
       expect(mod.s3Parts(s3seg(DIRECT, 0))).toBeNull();
       expect(mod.isSegmentUrl(s3seg(DIRECT, 0))).toBe(false);
     }
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it.each([
+    ['a bucket name that is not one', { S3_BUCKET: '<3speak videos bucket>' }, /S3_BUCKET/],
+    ['a CDN host with a scheme', { S3_BUCKET: 'videos-test', S3_CDN_HOST: 'https://buttercloud.b-cdn.net' }, /S3_CDN_HOST/],
+    ['a CDN host with a path', { S3_BUCKET: 'videos-test', S3_CDN_HOST: 'buttercloud.b-cdn.net/videos' }, /S3_CDN_HOST/],
+  ])('%s turns S3 off with a warning', (_label, env, named) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mod = requireFresh('hlsGateways.js', env);
+    expect(mod.S3_BUCKET).toBe('');
+    expect(mod.s3Parts(s3seg(DIRECT, 0))).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(named);
+    warn.mockRestore();
   });
 
   it('s3Parts reads our bucket on our two hosts, and nothing else', () => {
@@ -383,6 +400,13 @@ describe('S3 bucket (issue #54)', () => {
       const f = fakeFetch({ [s3seg(ZONE, 1)]: 'fail' });
       const route = on().createSegmentRouter({ ...fast, fetchImpl: f });
       expect(await route(s3seg(ZONE, 1))).toBe(s3seg(DIRECT, 1));
+    });
+
+    it('the zone falls back to ipfs-audio when the bucket fails too', async () => {
+      const f = fakeFetch({ [s3seg(ZONE, 5)]: 'fail', [s3seg(DIRECT, 5)]: 'fail' });
+      const route = on().createSegmentRouter({ ...fast, fetchImpl: f });
+      expect(await route(s3seg(ZONE, 5))).toBe(seg(AUDIO, 5));
+      expect(f.calls.map((c) => c.url)).toEqual([s3seg(ZONE, 5), s3seg(DIRECT, 5), seg(AUDIO, 5)]);
     });
 
     it('the bucket direct is the last resort, not probed', async () => {
