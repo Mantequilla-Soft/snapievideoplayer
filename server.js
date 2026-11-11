@@ -224,7 +224,10 @@ async function isEndedStreamPost(author, permlink) {
  * post shows within five minutes), a failed one only briefly so a node blip is not
  * remembered as "this post has no timeline". Concurrent requests share one fetch. */
 const { sanitizeTimeline, isAccount: isHiveAccount, isPermlink: isHivePermlink } = require('./timeline');
-const { createSegmentRouter, isSegmentUrl, isPlaylistUrl, segmentRouteUrl } = require('./hlsGateways');
+const {
+  createSegmentRouter, isSegmentUrl, isPlaylistUrl, segmentRouteUrl,
+  S3_BUCKET, S3_CDN_HOST, S3_DIRECT_HOST, s3Parts, s3Url,
+} = require('./hlsGateways');
 
 const TIMELINE_TTL_MS = 5 * 60 * 1000;
 const TIMELINE_FAIL_TTL_MS = 30 * 1000;
@@ -321,11 +324,12 @@ function timelinePostRef(video, isEmbed, owner, permlink) {
 // legacy-encoder codec bug on the fly). Non-m3u8 URLs pass through unchanged.
 // `path` lets native-player callers get a URL whose last path segment ends in .m3u8 —
 // ExoPlayer infers HLS from the extension and treats a bare `/hls` as a progressive file.
-function proxiedManifest(url, path = 'hls') {
+// `s3` (from storagePlan) tells /hls the video has a copy in the S3 bucket.
+function proxiedManifest(url, path = 'hls', { s3 = false } = {}) {
   if (!url || typeof url !== 'string' || !/\.m3u8(\?|$)/i.test(url)) return url;
   // Our own files (the expired-story clip) need no gateway race.
   if (url.startsWith(`${SELF_BASE}/`)) return url;
-  return `${SELF_BASE}/${path}?u=${encodeURIComponent(url)}`;
+  return `${SELF_BASE}/${path}?u=${encodeURIComponent(url)}${s3 ? '&s3=1' : ''}`;
 }
 
 // True if a CODECS="..." string lists a video codec. Old 3Speak encodes wrongly
@@ -393,6 +397,13 @@ const HLS_FETCH_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n >= 1000 ? n : 7500;
 })();
 
+// The S3 sources need no CID lookup, and a Bunny zone out of credit refuses at
+// once, so a hang there is an outage: give up sooner and try the next source.
+const S3_FETCH_TIMEOUT_MS = (() => {
+  const n = Number(process.env.S3_FETCH_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 200 ? n : 3000;
+})();
+
 /**
  * GET /hls?u=<encoded upstream master .m3u8 URL>
  *
@@ -417,22 +428,34 @@ const HLS_FETCH_TIMEOUT_MS = (() => {
  *     earlier, but hangs or trickles on the rest of an unannounced CID, and its
  *     cache is mixed segment by segment. So every segment goes through /seg, which
  *     decides for that one segment and redirects (hlsGateways.js).
+ *
+ *  4. S3 (issue #54): `u` may also be in our S3 bucket (an archived video: the S3
+ *     zone, then the bucket direct, then IPFS), and `s3=1` says an IPFS video has
+ *     a copy there (the hot zone, then S3, then the other gateways). The S3 URLs
+ *     are built from the CID path on our own hosts and bucket, never taken from
+ *     the request. `s3=1` is passed on to every child playlist and segment.
  */
 const routeSegment = createSegmentRouter();
 
 app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
   const upstream = String(req.query.u || '');
-  // Only proxy https IPFS-gateway manifests — never an open redirector/SSRF vector.
-  if (!/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(upstream) || !/\.m3u8(\?|$)/i.test(upstream)) {
+  // Only proxy https manifests on an IPFS gateway or in our S3 bucket — never an
+  // open redirector/SSRF vector.
+  const inBucket = s3Parts(upstream);
+  if ((!inBucket && !/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(upstream)) || !/\.m3u8(\?|$)/i.test(upstream)) {
     return res.status(400).send('bad manifest url');
   }
+  const hasS3 = !!inBucket || (req.query.s3 === '1' && !!S3_BUCKET);
   // The path after /ipfs/ (CID + file) is gateway-independent — try it everywhere.
-  const { candidates } = gatewayCandidates(upstream);
+  // An S3 path is the same CID + file under the bucket.
+  const { cidPath, candidates } = gatewayCandidates(
+    inBucket ? `${HLS_GATEWAYS[0]}/ipfs/${inBucket.cidPath}` : upstream
+  );
   if (!candidates.length) return res.status(400).send('bad manifest url');
 
   const fetchManifest = async (u) => {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), HLS_FETCH_TIMEOUT_MS);
+    const timer = setTimeout(() => ac.abort(), s3Parts(u) ? S3_FETCH_TIMEOUT_MS : HLS_FETCH_TIMEOUT_MS);
     try {
       const r = await fetch(u, { redirect: 'follow', signal: ac.signal });
       if (!r.ok) throw new Error(`status ${r.status}`);
@@ -452,12 +475,23 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
   // only Safari can decode. So: race only CORS-capable gateways, and keep the rest as a
   // genuine last resort (playback will likely still fail there, but a manifest beats a 504).
   const corsOk = (u) => !NON_CORS_GATEWAYS.some((g) => u.startsWith(`${g}/`));
+  // The S3 sources one at a time, the zone first: racing them would let the bucket
+  // beat Bunny and skip its cache.
+  const s3Tiers = (from) => (hasS3 ? from.map((h) => [s3Url(h, cidPath)]) : []);
   const rest = candidates.slice(1);
-  const tiers = [
-    corsOk(candidates[0]) ? [candidates[0]] : null,  // hot zone — common, fast path
-    rest.filter(corsOk),                             // migrated? race the CORS-capable ones
-    candidates.filter((u) => !corsOk(u)),            // last resort: reachable but browser-hostile
-  ].filter((t) => t && t.length);
+  const tiers = (inBucket
+    ? [
+      ...s3Tiers(inBucket.host === S3_CDN_HOST ? [S3_CDN_HOST, S3_DIRECT_HOST] : [S3_DIRECT_HOST]),
+      candidates.filter(corsOk),                     // gone from S3: race every CORS gateway
+      candidates.filter((u) => !corsOk(u)),
+    ]
+    : [
+      corsOk(candidates[0]) ? [candidates[0]] : null,  // hot zone — common, fast path
+      ...s3Tiers([S3_CDN_HOST, S3_DIRECT_HOST]),     // left the hotnode? its S3 copy
+      rest.filter(corsOk),                             // migrated? race the CORS-capable ones
+      candidates.filter((u) => !corsOk(u)),            // last resort: reachable but browser-hostile
+    ]
+  ).filter((t) => t && t.length && t.every(Boolean));
 
   let hit;
   for (const tier of tiers) {
@@ -490,14 +524,16 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
     // to the CDN exactly as before and this path goes cold on its own. Nothing to
     // revert when the zones come back.
     const viaSelf = !corsOk(hit.url);
+    const flag = hasS3 ? '&s3=1' : '';
     const childUrl = (u) => {
       const a = abs(u);
-      if (!/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(a)) return a;
+      const childInBucket = !!s3Parts(a);
+      if (!childInBucket && !/^https:\/\/[a-z0-9.-]+\/ipfs\//i.test(a)) return a;
       // Variant playlists come back through here, segments go through /seg
-      // (3. above).
-      if (!viaSelf) {
-        if (isPlaylistUrl(a)) return `${SELF_BASE}/hls?u=${encodeURIComponent(a)}`;
-        return isSegmentUrl(a) ? segmentRouteUrl(SELF_BASE, a) : a;
+      // (3. above). An S3 child sends CORS, so it never needs /ipfs-proxy.
+      if (!viaSelf || childInBucket) {
+        if (isPlaylistUrl(a)) return `${SELF_BASE}/hls?u=${encodeURIComponent(a)}${flag}`;
+        return isSegmentUrl(a) ? `${segmentRouteUrl(SELF_BASE, a)}${flag}` : a;
       }
       // A nested playlist goes back through /hls so it gets the same treatment
       // (codec fix + this rewrite) one level down; everything else is bytes.
@@ -530,18 +566,19 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
 });
 
 /**
- * GET /seg/<file>?u=<encoded gateway URL of one HLS segment>
+ * GET /seg/<file>?u=<encoded gateway URL of one HLS segment>[&s3=1]
  *
  * Redirects the player to the gateway that can serve this one segment right now
- * (hlsGateways.js: Bunny when it delivers, otherwise ipfs-audio.3speak.tv). Only
- * our own CORS gateways are accepted, so it is no open redirector. The bytes go
- * straight from the gateway to the player; the decision is cached per segment.
+ * (hlsGateways.js: Bunny when it delivers, otherwise ipfs-audio.3speak.tv, or the
+ * S3 bucket when the video has a copy there). Only our own CORS gateways and our
+ * bucket are accepted, so it is no open redirector. The bytes go straight from the
+ * gateway to the player; the decision is cached per segment.
  */
 app.get('/seg/:name', async (req, res) => {
   const url = String(req.query.u || '');
   if (!isSegmentUrl(url)) return res.status(400).send('bad segment url');
   let target = url;
-  try { target = await routeSegment(url); } catch (_) { /* fail open: the original */ }
+  try { target = await routeSegment(url, { s3: req.query.s3 === '1' }); } catch (_) { /* fail open: the original */ }
   res.set('Cache-Control', 'public, max-age=300');
   return res.redirect(302, target);
 });
@@ -709,6 +746,29 @@ function getPlaceholderVideo(placeholderType) {
 }
 
 /**
+ * Where a ready video plays from (issue #54), from the fields the hotnode
+ * archiver writes. On the hotnode (`hot`): from there, with its S3 copy as the
+ * backup. Not on it (`archived`, or `promoting`, not there yet): from the S3
+ * zone. `s3: true` tells /hls and /seg about the S3 copy. No `storage_state`, S3
+ * off, or an `s3_url` that is not our bucket and this video's CID: as before.
+ */
+function storagePlan(video, ipfsUrl) {
+  const plain = { urls: getVideoUrls(ipfsUrl), s3: false };
+  const state = video.storage_state;
+  if (!state || !S3_BUCKET) return plain;
+  if (state === 'hot' && !video.s3_url) return plain; // never archived: no S3 copy yet
+  const cid = (String(ipfsUrl).match(/^ipfs:\/\/([^/?#]+)/) || [])[1];
+  const copy = s3Parts(video.s3_url);
+  if (!cid || !copy || copy.cidPath.split('/')[0] !== cid || !['hot', 'archived', 'promoting'].includes(state)) {
+    console.warn(`[storage] ${video.owner}/${video.permlink}: storage_state ${state} with s3_url ${video.s3_url}, playing from IPFS`);
+    return plain;
+  }
+  if (state === 'hot') return { ...plain, s3: true };
+  const zone = s3Url(S3_CDN_HOST, copy.cidPath);
+  return { urls: { primary: zone, fallback1: zone, fallback2: zone, fallback3: zone }, s3: true };
+}
+
+/**
  * Determine video URLs based on status for legacy collection (videos)
  */
 function getVideoUrlsForLegacyStatus(video) {
@@ -756,7 +816,7 @@ function getVideoUrlsForLegacyStatus(video) {
       return { error: 'Video source not available', status: video.status };
     }
     return {
-      urls: getVideoUrls(video.video_v2),
+      ...storagePlan(video, video.video_v2),
       isPlaceholder: false
     };
   }
@@ -783,7 +843,7 @@ function getVideoUrlsForEmbedStatus(video) {
   // Published videos with manifest - serve actual content
   if (status === VIDEO_STATUS.PUBLISHED && video.manifest_cid) {
     return {
-      urls: getVideoUrls(`ipfs://${video.manifest_cid}/manifest.m3u8`),
+      ...storagePlan(video, `ipfs://${video.manifest_cid}/manifest.m3u8`),
       isPlaceholder: false
     };
   }
@@ -868,7 +928,7 @@ app.get('/api/watch', async (req, res) => {
     // ===== MOBILE API RESPONSE (info=true) =====
     if (isInfoRequest) {
       // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
-      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8');
+      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8', result);
       const thumbnailCdn = isEmbed && isExpiredStory(video)
         ? `${SELF_BASE}${STORY_EXPIRED_POSTER}`
         : convertThumbnailToCdn(isEmbed ? video.thumbnail_url : video.thumbnail);
@@ -907,14 +967,14 @@ app.get('/api/watch', async (req, res) => {
         title: video.originalFilename || `${video.owner}/${video.permlink}`,
         status: video.status,
         isPlaceholder: result.isPlaceholder,
-        videoUrl: proxiedManifest(result.urls.primary),
+        videoUrl: proxiedManifest(result.urls.primary, 'hls', result),
         // /hls races every gateway internally, so the player needs no separate fallback
         // chain. Equal fallbacks make the SDK drop them (it skips any === videoUrl) and
         // fire its fatal error promptly once the single /hls source is exhausted — that's
         // what drives the watch page's "no longer available" hint.
-        videoUrlFallback1: proxiedManifest(result.urls.primary),
-        videoUrlFallback2: proxiedManifest(result.urls.primary),
-        videoUrlFallback3: proxiedManifest(result.urls.primary),
+        videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', result),
+        videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', result),
+        videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', result),
         thumbnail: thumbnail,
         duration: video.duration || 0,
         views: video.views || 0,
@@ -938,14 +998,14 @@ app.get('/api/watch', async (req, res) => {
         thumbnail: video.thumbnail
           ? transformIPFSUrl(video.thumbnail)
           : `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`,
-        videoUrl: proxiedManifest(result.urls.primary),
+        videoUrl: proxiedManifest(result.urls.primary, 'hls', result),
         // /hls races every gateway internally, so the player needs no separate fallback
         // chain. Equal fallbacks make the SDK drop them (it skips any === videoUrl) and
         // fire its fatal error promptly once the single /hls source is exhausted — that's
         // what drives the watch page's "no longer available" hint.
-        videoUrlFallback1: proxiedManifest(result.urls.primary),
-        videoUrlFallback2: proxiedManifest(result.urls.primary),
-        videoUrlFallback3: proxiedManifest(result.urls.primary),
+        videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', result),
+        videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', result),
+        videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', result),
         duration: video.duration || 0,
         views: video.views || 0,
         tags: video.tags_v2 || video.tags || [],
@@ -1000,7 +1060,7 @@ app.get('/api/embed', async (req, res) => {
     // ===== MOBILE API RESPONSE (info=true) =====
     if (isInfoRequest) {
       // /hls races gateways; the raw hot-zone URL 500s once a video leaves it.
-      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8');
+      const videoCdn = proxiedManifest(convertToCdnUrl(result.urls.primary), 'hls/manifest.m3u8', result);
       const thumbnailCdn = isExpiredStory(video)
         ? `${SELF_BASE}${STORY_EXPIRED_POSTER}`
         : convertThumbnailToCdn(video.thumbnail_url);
@@ -1052,12 +1112,12 @@ app.get('/api/embed', async (req, res) => {
       title: video.originalFilename || `${video.owner}/${video.permlink}`,
       status: video.status,
       isPlaceholder: result.isPlaceholder,
-      videoUrl: proxiedManifest(result.urls.primary),
+      videoUrl: proxiedManifest(result.urls.primary, 'hls', result),
       // /hls races every gateway internally, so equal fallbacks make the SDK drop its
       // separate chain and fire its fatal error promptly — see the /api/watch blocks.
-      videoUrlFallback1: proxiedManifest(result.urls.primary),
-      videoUrlFallback2: proxiedManifest(result.urls.primary),
-      videoUrlFallback3: proxiedManifest(result.urls.primary),
+      videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', result),
+      videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', result),
+      videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', result),
       thumbnail: thumbnail,
       duration: video.duration || 0,
       views: video.views || 0,

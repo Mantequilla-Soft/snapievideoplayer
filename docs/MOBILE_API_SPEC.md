@@ -20,7 +20,7 @@ GET /api/embed?v=owner/permlink&info=true
 ### Legacy Video Response
 ```json
 {
-  "cid": "https://hotipfs-3speak-1.b-cdn.net/ipfs/QmXxxx/manifest.m3u8",
+  "cid": "https://play.3speak.tv/hls/manifest.m3u8?u=https%3A%2F%2Fhotipfs-3speak-1.b-cdn.net%2Fipfs%2FQmXxxx%2Fmanifest.m3u8",
   "thumbnail": "https://hotipfs-3speak-1.b-cdn.net/ipfs/QmYyyy",
   "views": 42
 }
@@ -29,7 +29,7 @@ GET /api/embed?v=owner/permlink&info=true
 ### Embed Video Response
 ```json
 {
-  "cid": "https://hotipfs-3speak-1.b-cdn.net/ipfs/QmXxxx/manifest.m3u8",
+  "cid": "https://play.3speak.tv/hls/manifest.m3u8?u=https%3A%2F%2Fbuttercloud.b-cdn.net%2F<bucket>%2FQmXxxx%2Fmanifest.m3u8&s3=1",
   "thumbnail": "https://hotipfs-3speak-1.b-cdn.net/ipfs/QmYyyy",
   "short": true,
   "views": 3
@@ -40,7 +40,7 @@ GET /api/embed?v=owner/permlink&info=true
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `cid` | string (HTTPS URL) | Full CDN URL pointing to HLS manifest. Ready to pass directly to native video player. |
+| `cid` | string (HTTPS URL) | The player's `/hls/manifest.m3u8` route for the video's HLS manifest. Despite the name it is a URL, not a CID: pass it to the native player exactly as given, query string included. Don't parse a CID out of it. |
 | `thumbnail` | string (HTTPS URL) | Full CDN URL for thumbnail image. Pass directly to image component. |
 | `short` | boolean | Embed videos only. Indicates short-form video format. |
 | `views` | number | Current view count. |
@@ -48,7 +48,7 @@ GET /api/embed?v=owner/permlink&info=true
 ## Data Trust & Validation
 
 **All URLs are production-ready:**
-- CDN URLs use BunnyCDN hotnode (`hotipfs-3speak-1.b-cdn.net`) as primary gateway
+- `cid` goes through the player's `/hls` route, which picks the source and fails over (see Source Chain below)
 - Manifest always includes `/manifest.m3u8` suffix for HLS compliance
 - Thumbnail URLs are pre-validated (never null; falls back to default if missing)
 
@@ -79,15 +79,24 @@ Server automatically handles video state:
 
 **Error handling:** If request fails (network timeout, 404, 5xx), fall back to app's default video CID.
 
-## Gateway Chain (Server-Side Only)
+## Source Chain (Server-Side Only)
 
-The server uses this gateway priority for CDN resolution:
-1. `https://hotipfs-3speak-1.b-cdn.net/ipfs` (BunnyCDN Hotnode — primary, fastest)
-2. `https://ipfs-3speak.b-cdn.net/ipfs` (BunnyCDN legacy fallback)
-3. `https://ipfs.3speak.tv/ipfs` (Supernode direct IPFS)
-4. `https://ipfs-audio.3speak.tv/ipfs` (Audionode backup)
+The server picks the source per video from the Mongo `storage_state` the hotnode archiver writes. `/hls` fails over between manifest sources in this order:
 
-**Mobile app receives only the primary CDN URL.** No fallback URLs needed on client. Server handles availability.
+| `storage_state` | Order |
+|---|---|
+| missing | hotnode zone → other IPFS gateways (as before) |
+| `hot` | hotnode zone → S3 zone → `s3.3speak.tv` → other IPFS gateways |
+| `archived`, `promoting` | S3 zone (`buttercloud.b-cdn.net`) → `s3.3speak.tv` → IPFS gateways |
+
+IPFS gateways: `hotipfs-3speak-1.b-cdn.net` (hotnode), `ipfs-3speak.b-cdn.net`, `ipfs-audio.3speak.tv`, and `ipfs.3speak.tv` (supernode, last resort). S3 is used only when the server has `S3_BUCKET` set.
+
+`/seg` then fails over each segment from the source the manifest came from:
+- On a Bunny IPFS zone: S3 zone → `s3.3speak.tv` (only when the video has an S3 copy) → `ipfs-audio.3speak.tv`
+- On the S3 zone: `s3.3speak.tv` → `ipfs-audio.3speak.tv`
+- On `s3.3speak.tv` or `ipfs-audio.3speak.tv`: no further fallback (those are the last resorts)
+
+**Mobile app receives one URL.** No fallback URLs needed on client. Server handles availability.
 
 ## Testing
 

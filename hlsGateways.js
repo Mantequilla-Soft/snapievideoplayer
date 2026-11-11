@@ -13,6 +13,12 @@
  * probeMs; if it has not passed by hedgeMs, ipfs-audio is asked in parallel, and
  * the player is redirected to whichever works. Bunny wins whenever it passes.
  * Answers are cached per segment, and concurrent requests share one decision.
+ *
+ * Archived videos (issue #54) live in ONE Buttercloud S3 bucket of ours, served by
+ * a Bunny zone (S3_CDN_HOST) and straight from s3.3speak.tv when Bunny is down or
+ * out of credit. Both send CORS. The bucket is checked as well as the host: S3
+ * paths are names, not hashes, so another bucket on s3.3speak.tv could hold
+ * anything under a CID's name. S3_BUCKET unset turns S3 off.
  */
 
 const FALLBACK_GATEWAYS = ['https://ipfs-audio.3speak.tv'];
@@ -23,6 +29,24 @@ const SEGMENT_HOSTS = new Set([
   'hotipfs-3speak-1.b-cdn.net',
   'ipfs-audio.3speak.tv',
 ]);
+
+const S3_DIRECT_HOST = 's3.3speak.tv';
+const S3_CDN_HOST = (process.env.S3_CDN_HOST || 'buttercloud.b-cdn.net').trim().toLowerCase();
+// A bad value turns S3 off (everything plays from IPFS), loudly: an archived video
+// may already be gone from IPFS.
+const S3_BUCKET = (() => {
+  const bucket = process.env.S3_BUCKET || '';
+  if (!bucket) return '';
+  if (!/^[a-z0-9][a-z0-9.-]{1,62}$/.test(bucket)) {
+    console.warn(`[storage] S3_BUCKET "${bucket}" is not a bucket name: S3 playback is off`);
+    return '';
+  }
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(S3_CDN_HOST)) {
+    console.warn(`[storage] S3_CDN_HOST "${S3_CDN_HOST}" is not a bare host name: S3 playback is off`);
+    return '';
+  }
+  return bucket;
+})();
 
 const envNum = (name, fallback, min) => {
   const n = Number(process.env[name]);
@@ -52,15 +76,38 @@ function gatewayOf(url) {
 
 const isPlaylistUrl = (url) => /\.m3u8(\?|$)/i.test(String(url || ''));
 
+// `{ host, cidPath }` for `https://<S3 host>/<S3_BUCKET>/<cid>/<file>`, else null.
+// Read from the parsed URL, so `..` cannot climb out of the bucket. The query is
+// dropped: the bucket is public, and Bunny ignores it anyway.
+function s3Parts(url) {
+  if (!S3_BUCKET) return null;
+  let u;
+  try { u = new URL(url); } catch (_) { return null; }
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== 'https:' || u.port || u.username || u.password) return null;
+  if (host !== S3_CDN_HOST && host !== S3_DIRECT_HOST) return null;
+  const prefix = `/${S3_BUCKET}/`;
+  if (!u.pathname.startsWith(prefix)) return null;
+  const cidPath = u.pathname.slice(prefix.length);
+  return /^[^/]+\/./.test(cidPath) ? { host, cidPath } : null;
+}
+
+// The same object on another S3 host, or null if it would not pass s3Parts.
+function s3Url(host, cidPath) {
+  const p = s3Parts(`https://${host}/${S3_BUCKET}/${cidPath}`);
+  return p ? `https://${p.host}/${S3_BUCKET}/${p.cidPath}` : null;
+}
+
 // A segment (or init map / key) on one of our CORS gateways: what /hls hands to
 // /seg and the only thing /seg will redirect for.
 function isSegmentUrl(url) {
   let u;
   try { u = new URL(url); } catch (_) { return false; }
+  if (isPlaylistUrl(url)) return false;
+  if (s3Parts(url)) return true;
   return u.protocol === 'https:'
     && SEGMENT_HOSTS.has(u.hostname)
-    && /^\/ipfs\/[^/]+\/./.test(u.pathname)
-    && !isPlaylistUrl(url);
+    && /^\/ipfs\/[^/]+\/./.test(u.pathname);
 }
 
 // The /seg address for a segment. The path ends in the segment's own file name:
@@ -103,8 +150,9 @@ async function probe(url, timeoutMs, fetchImpl, bytes) {
 }
 
 /**
- * Returns `route(url)`, resolving to the address a player should fetch the segment
- * `url` from: `url` itself, or the same path on a fallback gateway.
+ * Returns `route(url, { s3 })`, resolving to the address a player should fetch the
+ * segment `url` from: `url` itself, or the same path on a fallback. `s3` says the
+ * video has a copy in the bucket, which an IPFS segment can then fall back to.
  */
 function createSegmentRouter(opts = {}) {
   const o = { ...DEFAULTS, fallbacks: FALLBACK_GATEWAYS, fetchImpl: (...a) => fetch(...a), now: Date.now, ...opts };
@@ -117,35 +165,53 @@ function createSegmentRouter(opts = {}) {
     while (cache.size > o.maxEntries) cache.delete(cache.keys().next().value);
   };
 
-  async function findFallback(url, own) {
-    for (const g of o.fallbacks) {
-      if (g === own) continue;
-      const alt = g + url.slice(own.length);
+  // Where else this segment can come from, best first. On the S3 zone: the bucket
+  // itself, then ipfs-audio. On a Bunny IPFS zone: the bucket (if the video has a
+  // copy there), then ipfs-audio. Already on the bucket or ipfs-audio: nowhere, so
+  // it is not probed (a probe of the bucket is egress that fills no cache).
+  function alternatesFor(url, s3) {
+    const inBucket = s3Parts(url);
+    if (inBucket) {
+      if (inBucket.host !== S3_CDN_HOST) return [];
+      return [s3Url(S3_DIRECT_HOST, inBucket.cidPath), ...o.fallbacks.map((g) => `${g}/ipfs/${inBucket.cidPath}`)];
+    }
+    const own = gatewayOf(url);
+    if (!own || o.fallbacks.includes(own)) return [];
+    const ipfs = o.fallbacks.map((g) => g + url.slice(own.length));
+    if (!s3) return ipfs;
+    const cidPath = new URL(url).pathname.replace(/^\/ipfs\//, '');
+    return [s3Url(S3_CDN_HOST, cidPath), s3Url(S3_DIRECT_HOST, cidPath), ...ipfs].filter(Boolean);
+  }
+
+  async function findFallback(alts) {
+    for (const alt of alts) {
       if (await probe(alt, o.fallbackProbeMs, o.fetchImpl, o.probeBytes)) return alt;
     }
     return null;
   }
 
-  async function decide(url, own) {
+  async function decide(key, url, alts) {
     let fallback = null;
-    const startFallback = () => (fallback ||= findFallback(url, own));
+    const startFallback = () => (fallback ||= findFallback(alts));
     const hedge = setTimeout(startFallback, o.hedgeMs);
     const ok = await probe(url, o.probeMs, o.fetchImpl, o.probeBytes);
     clearTimeout(hedge);
-    if (ok) return remember(url, url, o.cacheMs) || url;
+    if (ok) return remember(key, url, o.cacheMs) || url;
     const alt = await startFallback();
-    if (alt) return remember(url, alt, o.cacheMs) || alt;
-    return remember(url, url, o.missCacheMs) || url;
+    if (alt) return remember(key, alt, o.cacheMs) || alt;
+    return remember(key, url, o.missCacheMs) || url;
   }
 
-  return async function route(url) {
-    const own = gatewayOf(url);
-    if (!own || o.fallbacks.includes(own)) return url;
-    const known = cache.get(url);
+  return async function route(url, { s3 = false } = {}) {
+    const alts = alternatesFor(url, s3);
+    if (!alts.length) return url;
+    // The flag changes the answer, so it is part of the key.
+    const key = s3 ? `${url}|s3` : url;
+    const known = cache.get(key);
     if (known && known.until > o.now()) return known.target;
-    if (inflight.has(url)) return inflight.get(url);
-    const p = decide(url, own).finally(() => inflight.delete(url));
-    inflight.set(url, p);
+    if (inflight.has(key)) return inflight.get(key);
+    const p = decide(key, url, alts).finally(() => inflight.delete(key));
+    inflight.set(key, p);
     return p;
   };
 }
@@ -153,8 +219,13 @@ function createSegmentRouter(opts = {}) {
 module.exports = {
   FALLBACK_GATEWAYS,
   SEGMENT_HOSTS,
+  S3_BUCKET,
+  S3_CDN_HOST,
+  S3_DIRECT_HOST,
   gatewayOf,
   isPlaylistUrl,
+  s3Parts,
+  s3Url,
   isSegmentUrl,
   segmentRouteUrl,
   createSegmentRouter,

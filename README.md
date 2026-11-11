@@ -10,7 +10,7 @@ A full-stack HTML5 video player built with Video.js for the 3speak platform. Sup
 - **Full-stack architecture** - Node.js/Express backend + Video.js frontend
 - **MongoDB integration** - Connects to 3speak MongoDB for video metadata
 - **Dual video systems** - Supports legacy `videos` collection and new `embed-video` collection
-- **HLS streaming** - Loads videos from IPFS gateway as HLS streams
+- **HLS streaming** - Plays each video from where it lives: the hotnode over IPFS, or the Buttercloud S3 archive (Bunny zone, then `s3.3speak.tv`) for videos the archiver moved off it. `/hls` and `/seg` fail over between sources server-side
 - **Scrub preview** - YouTube-style low-res thumbnail above the seek bar on hover (desktop) / drag (mobile). A detached hls.js `<video>` pinned to the lowest rendition renders the frame, so it never disturbs playback. On by default; disable with `preview=0`
 - **"Most replayed" heatmap** - Aggregate watch/rewatch graph above the seek bar (from `/api/heatmap`), YouTube-style. Shows once a video has enough independent viewers. On by default; disable with `heatmap=0`
 - **Status-based placeholders** - Shows different videos based on encoding status (processing, finalizing, failed, deleted)
@@ -208,6 +208,9 @@ All configuration is in `.env`:
 - `MONGODB_COLLECTION_LEGACY` - Legacy videos collection (videos)
 - `MONGODB_COLLECTION_NEW` - Embed videos collection (embed-video)
 - `IPFS_GATEWAY` - IPFS gateway URL
+- `S3_BUCKET` - The one Buttercloud S3 bucket archived videos play from. Unset: everything plays from IPFS, `storage_state` is ignored
+- `S3_CDN_HOST` - Bunny pull zone in front of the bucket (default `buttercloud.b-cdn.net`)
+- `S3_FETCH_TIMEOUT_MS` - How long `/hls` waits for one S3 source before the next (default 3000)
 - `PLACEHOLDER_*_CID` - Status placeholder video CIDs
 - `PORT` - Server port (default: 3005)
 - `NODE_ENV` - Environment (development/production)
@@ -388,7 +391,7 @@ AspectRatio(
 
 ## Development Notes
 
-- HLS streams loaded from IPFS gateway
+- HLS streams loaded from IPFS or the S3 archive, chosen per video from Mongo `storage_state` (`hot` → hotnode first; `archived` / `promoting` → S3 first; missing → IPFS as before)
 - View counter increments on first play
 - Player events logged to console for debugging
 - Supports all Video.js features and plugins

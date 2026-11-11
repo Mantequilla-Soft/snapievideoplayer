@@ -24,6 +24,8 @@ export const TEST_ENV = {
   STREAM_ENDPOINTS: 'https://hangouts.test|wss://lk1.test, broken-entry ,https://hangouts2.test/|wss://lk2.test',
   LIVE_ROOM_API_URLS: 'https://live.test',
   HLS_FETCH_TIMEOUT_MS: '1000',
+  S3_BUCKET: 'videos-test',
+  S3_FETCH_TIMEOUT_MS: '300',
   IPFS_PROXY_HEADER_TIMEOUT_MS: '1000',
   VIEW_IP_HASH_SECRET: 'view-hash-test-secret',
 };

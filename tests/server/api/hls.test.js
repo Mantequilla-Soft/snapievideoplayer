@@ -440,3 +440,137 @@ describe('GET /ipfs-proxy', () => {
     await expect(request(app).get(`/ipfs-proxy?u=${enc(at(SUPER, 'cut.bin'))}`)).rejects.toThrow();
   });
 });
+
+describe('S3 archive (storage_state, issue #54)', () => {
+  const ZONE = 'https://buttercloud.b-cdn.net/videos-test';
+  const DIRECT = 'https://s3.3speak.tv/videos-test';
+  const s3 = (base, file) => `${base}/${CID}/${file}`;
+  const PROBE = 256 * 1024;
+  const big = () => new Response(new Uint8Array(PROBE + 10), { status: 206 });
+  const S3_VARIANT = ['#EXTM3U', '#EXT-X-TARGETDURATION:6', '#EXTINF:6.0,', '480p_0.ts', '#EXT-X-ENDLIST'].join('\n');
+
+  describe('GET /hls', () => {
+    it('archived: serves the S3 zone manifest with the codec fix, children flagged', async () => {
+      const f = gateways({ [s3(ZONE, 'manifest.m3u8')]: MASTER });
+      const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}&s3=1`);
+      expect(res.status).toBe(200);
+      const lines = res.text.split('\n');
+      expect(lines[2]).toBe('#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=854x480');
+      expect(lines[3]).toBe(`${SELF}/hls?u=${enc(s3(ZONE, '480p/index.m3u8'))}&s3=1`);
+      expect(lines[6]).toContain(`URI="${SELF}/hls?u=${enc(s3(ZONE, 'subs/en.m3u8'))}&s3=1"`);
+      expect(calledUrls(f)).toEqual([s3(ZONE, 'manifest.m3u8')]);
+    });
+
+    it('an S3 variant sends its segments through /seg, flagged', async () => {
+      gateways({ [s3(ZONE, '480p/index.m3u8')]: S3_VARIANT });
+      const res = await request(app).get(`/hls?u=${enc(s3(ZONE, '480p/index.m3u8'))}&s3=1`);
+      expect(res.text.split('\n')[3]).toBe(`${SELF}/seg/480p_0.ts?u=${enc(s3(ZONE, '480p/480p_0.ts'))}&s3=1`);
+    });
+
+    it('the zone refuses (out of credit): plays from the bucket direct', async () => {
+      const f = gateways({ [s3(ZONE, 'manifest.m3u8')]: 403, [s3(DIRECT, 'manifest.m3u8')]: MASTER });
+      const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}&s3=1`);
+      expect(res.status).toBe(200);
+      expect(res.text.split('\n')[3]).toBe(`${SELF}/hls?u=${enc(s3(DIRECT, '480p/index.m3u8'))}&s3=1`);
+      expect(calledUrls(f)).toEqual([s3(ZONE, 'manifest.m3u8'), s3(DIRECT, 'manifest.m3u8')]);
+    });
+
+    it('the zone hangs: gives up after S3_FETCH_TIMEOUT_MS, not HLS_FETCH_TIMEOUT_MS', async () => {
+      gateways({ [s3(ZONE, 'manifest.m3u8')]: hang, [s3(DIRECT, 'manifest.m3u8')]: MASTER });
+      const started = Date.now();
+      const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}`);
+      expect(res.status).toBe(200);
+      expect(Date.now() - started).toBeLessThan(900);
+    });
+
+    it('gone from S3: races the CORS IPFS gateways, children still flagged', async () => {
+      const f = gateways({ [at(BCDN, 'manifest.m3u8')]: MASTER });
+      const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}`);
+      expect(res.status).toBe(200);
+      expect(res.text.split('\n')[3]).toBe(`${SELF}/hls?u=${enc(at(BCDN, '480p/index.m3u8'))}&s3=1`);
+      const asked = calledUrls(f);
+      expect(asked.slice(0, 2)).toEqual([s3(ZONE, 'manifest.m3u8'), s3(DIRECT, 'manifest.m3u8')]);
+      expect(asked).not.toContain(at(SUPER, 'manifest.m3u8'));
+    });
+
+    it('hot with an S3 copy: the hot zone first, then the S3 zone', async () => {
+      const f = gateways({ [s3(ZONE, 'manifest.m3u8')]: MASTER });
+      const res = await request(app).get(`/hls?u=${enc(at(HOT, 'manifest.m3u8'))}&s3=1`);
+      expect(res.status).toBe(200);
+      expect(res.text.split('\n')[3]).toBe(`${SELF}/hls?u=${enc(s3(ZONE, '480p/index.m3u8'))}&s3=1`);
+      expect(calledUrls(f)).toEqual([at(HOT, 'manifest.m3u8'), s3(ZONE, 'manifest.m3u8')]);
+    });
+
+    it('hot without the flag never asks S3', async () => {
+      const f = gateways({ [at(BCDN, 'manifest.m3u8')]: MASTER });
+      await request(app).get(`/hls?u=${enc(at(HOT, 'manifest.m3u8'))}`);
+      expect(calledUrls(f).some((u) => u.includes('videos-test'))).toBe(false);
+    });
+
+    it.each([
+      ['an S3 path on another host', `https://evil.test/videos-test/${CID}/manifest.m3u8`],
+      ['another bucket on s3.3speak.tv', `https://s3.3speak.tv/someone-else/${CID}/manifest.m3u8`],
+      ['another bucket on the zone', `https://buttercloud.b-cdn.net/someone-else/${CID}/manifest.m3u8`],
+      ['a path that climbs out of the bucket', `${DIRECT}/../someone-else/${CID}/manifest.m3u8`],
+      ['an encoded climb', `${DIRECT}/%2e%2e/someone-else/${CID}/manifest.m3u8`],
+      ['plain http', `http://s3.3speak.tv/videos-test/${CID}/manifest.m3u8`],
+      ['another port', `https://s3.3speak.tv:8443/videos-test/${CID}/manifest.m3u8`],
+      ['no file under the CID', `${DIRECT}/manifest.m3u8`],
+    ])('400 for %s, asking nobody', async (_label, url) => {
+      const f = installFetch();
+      const res = await request(app).get(`/hls?u=${enc(url)}&s3=1`);
+      expect(res.status).toBe(400);
+      expect(f).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /seg/:name', () => {
+    it('an S3 zone segment that fails the probe goes to the bucket direct', async () => {
+      const seg = s3(ZONE, '480p/s3-fb-0.ts');
+      const alt = s3(DIRECT, '480p/s3-fb-0.ts');
+      const f = installFetch((url) => (url === alt ? big() : text('', 403)));
+      const res = await request(app).get(`/seg/s3-fb-0.ts?u=${enc(seg)}&s3=1`);
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe(alt);
+      expect(calledUrls(f)).toEqual([seg, alt]);
+    });
+
+    it('a segment already on the bucket direct is redirected without probing', async () => {
+      const seg = s3(DIRECT, '480p/s3-direct-0.ts');
+      const f = installFetch();
+      const res = await request(app).get(`/seg/s3-direct-0.ts?u=${enc(seg)}&s3=1`);
+      expect(res.headers.location).toBe(seg);
+      expect(f).not.toHaveBeenCalled();
+    });
+
+    it('a hot segment of a video with an S3 copy falls back to the S3 zone, then direct', async () => {
+      const seg = at(HOT, '480p/s3-hot-0.ts');
+      const direct = s3(DIRECT, '480p/s3-hot-0.ts');
+      const f = installFetch((url) => (url === direct ? big() : text('', 502)));
+      const res = await request(app).get(`/seg/s3-hot-0.ts?u=${enc(seg)}&s3=1`);
+      expect(res.headers.location).toBe(direct);
+      expect(calledUrls(f)).toEqual([seg, s3(ZONE, '480p/s3-hot-0.ts'), direct]);
+    });
+
+    it('the flag is part of the cached decision', async () => {
+      const seg = at(HOT, '480p/s3-key-0.ts');
+      const zone = s3(ZONE, '480p/s3-key-0.ts');
+      const audio = at(AUDIO, '480p/s3-key-0.ts');
+      installFetch((url) => (url === zone || url === audio ? big() : text('', 502)));
+      const flagged = await request(app).get(`/seg/x.ts?u=${enc(seg)}&s3=1`);
+      const plain = await request(app).get(`/seg/x.ts?u=${enc(seg)}`);
+      expect(flagged.headers.location).toBe(zone);
+      expect(plain.headers.location).toBe(audio);
+    });
+
+    it.each([
+      ['another bucket', `https://s3.3speak.tv/someone-else/${CID}/a.ts`],
+      ['another host', `https://evil.test/videos-test/${CID}/a.ts`],
+      ['an S3 playlist', s3(ZONE, '480p/index.m3u8')],
+    ])('400 for %s', async (_label, url) => {
+      installFetch();
+      const res = await request(app).get(`/seg/a.ts?u=${enc(url)}&s3=1`);
+      expect(res.status).toBe(400);
+    });
+  });
+});

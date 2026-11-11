@@ -330,3 +330,104 @@ describe('probe settings from the environment', () => {
     expect(r.waited).toBe(3700);
   });
 });
+
+describe('S3 bucket (issue #54)', () => {
+  const ZONE = 'https://buttercloud.b-cdn.net/videos-test';
+  const DIRECT = 'https://s3.3speak.tv/videos-test';
+  const s3seg = (base, n) => `${base}/${CID}/480p/480p_${n}.ts`;
+  const on = () => requireFresh('hlsGateways.js', { S3_BUCKET: 'videos-test', S3_CDN_HOST: undefined });
+
+  it('is off without S3_BUCKET, quietly', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const S3_BUCKET of [undefined, '']) {
+      const mod = requireFresh('hlsGateways.js', { S3_BUCKET });
+      expect(mod.S3_BUCKET).toBe('');
+      expect(mod.s3Parts(s3seg(DIRECT, 0))).toBeNull();
+      expect(mod.isSegmentUrl(s3seg(DIRECT, 0))).toBe(false);
+    }
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it.each([
+    ['a bucket name that is not one', { S3_BUCKET: '<3speak videos bucket>' }, /S3_BUCKET/],
+    ['a CDN host with a scheme', { S3_BUCKET: 'videos-test', S3_CDN_HOST: 'https://buttercloud.b-cdn.net' }, /S3_CDN_HOST/],
+    ['a CDN host with a path', { S3_BUCKET: 'videos-test', S3_CDN_HOST: 'buttercloud.b-cdn.net/videos' }, /S3_CDN_HOST/],
+  ])('%s turns S3 off with a warning', (_label, env, named) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mod = requireFresh('hlsGateways.js', env);
+    expect(mod.S3_BUCKET).toBe('');
+    expect(mod.s3Parts(s3seg(DIRECT, 0))).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(named);
+    warn.mockRestore();
+  });
+
+  it('s3Parts reads our bucket on our two hosts, and nothing else', () => {
+    const mod = on();
+    expect(mod.s3Parts(s3seg(ZONE, 0))).toEqual({ host: 'buttercloud.b-cdn.net', cidPath: `${CID}/480p/480p_0.ts` });
+    expect(mod.s3Parts(`${s3seg(DIRECT, 0)}?x=1`)).toEqual({ host: 's3.3speak.tv', cidPath: `${CID}/480p/480p_0.ts` });
+    expect(mod.s3Parts(`https://s3.3speak.tv/other/${CID}/a.ts`)).toBeNull();
+    expect(mod.s3Parts(`https://evil.test/videos-test/${CID}/a.ts`)).toBeNull();
+    expect(mod.s3Parts(`${DIRECT}/../other/${CID}/a.ts`)).toBeNull();
+    expect(mod.s3Parts(`${DIRECT}/${CID}`)).toBeNull();
+    expect(mod.s3Parts('https://user@s3.3speak.tv/videos-test/x/a.ts')).toBeNull();
+    expect(mod.s3Parts(undefined)).toBeNull();
+    expect(mod.s3Url('s3.3speak.tv', `${CID}/a.ts`)).toBe(`${DIRECT}/${CID}/a.ts`);
+    expect(mod.s3Url('s3.3speak.tv', '../../x/a.ts')).toBeNull();
+  });
+
+  it('S3_CDN_HOST moves the zone', () => {
+    const mod = requireFresh('hlsGateways.js', { S3_BUCKET: 'videos-test', S3_CDN_HOST: 'Videos.Example.Test' });
+    expect(mod.S3_CDN_HOST).toBe('videos.example.test');
+    expect(mod.s3Parts(`https://videos.example.test/videos-test/${CID}/a.ts`)).not.toBeNull();
+    expect(mod.s3Parts(s3seg(ZONE, 0))).toBeNull();
+  });
+
+  it('isSegmentUrl takes S3 segments but not S3 playlists', () => {
+    const mod = on();
+    expect(mod.isSegmentUrl(s3seg(ZONE, 0))).toBe(true);
+    expect(mod.isSegmentUrl(s3seg(DIRECT, 0))).toBe(true);
+    expect(mod.isSegmentUrl(`${ZONE}/${CID}/480p/index.m3u8`)).toBe(false);
+  });
+
+  describe('router', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+    const fast = { probeMs: 1500, hedgeMs: 700, fallbackProbeMs: 3000, probeBytes: 8 * 1024 };
+
+    it('the zone falls back to the bucket direct', async () => {
+      const f = fakeFetch({ [s3seg(ZONE, 1)]: 'fail' });
+      const route = on().createSegmentRouter({ ...fast, fetchImpl: f });
+      expect(await route(s3seg(ZONE, 1))).toBe(s3seg(DIRECT, 1));
+    });
+
+    it('the zone falls back to ipfs-audio when the bucket fails too', async () => {
+      const f = fakeFetch({ [s3seg(ZONE, 5)]: 'fail', [s3seg(DIRECT, 5)]: 'fail' });
+      const route = on().createSegmentRouter({ ...fast, fetchImpl: f });
+      expect(await route(s3seg(ZONE, 5))).toBe(seg(AUDIO, 5));
+      expect(f.calls.map((c) => c.url)).toEqual([s3seg(ZONE, 5), s3seg(DIRECT, 5), seg(AUDIO, 5)]);
+    });
+
+    it('the bucket direct is the last resort, not probed', async () => {
+      const f = fakeFetch();
+      const route = on().createSegmentRouter({ ...fast, fetchImpl: f });
+      expect(await route(s3seg(DIRECT, 2))).toBe(s3seg(DIRECT, 2));
+      expect(f.calls).toHaveLength(0);
+    });
+
+    it('a Bunny IPFS segment with s3 tries the zone, the bucket, then ipfs-audio', async () => {
+      const f = fakeFetch({ [seg(HOT, 3)]: 'fail', [s3seg(ZONE, 3)]: 'fail', [s3seg(DIRECT, 3)]: 'fail' });
+      const route = on().createSegmentRouter({ ...fast, fetchImpl: f });
+      expect(await route(seg(HOT, 3), { s3: true })).toBe(seg(AUDIO, 3));
+      expect(f.calls.map((c) => c.url)).toEqual([seg(HOT, 3), s3seg(ZONE, 3), s3seg(DIRECT, 3), seg(AUDIO, 3)]);
+    });
+
+    it('s3 is ignored when S3 is off', async () => {
+      const f = fakeFetch({ [seg(HOT, 4)]: 'fail' });
+      const route = requireFresh('hlsGateways.js', { S3_BUCKET: undefined }).createSegmentRouter({ ...fast, fetchImpl: f });
+      expect(await route(seg(HOT, 4), { s3: true })).toBe(seg(AUDIO, 4));
+      expect(f.calls.map((c) => c.url)).toEqual([seg(HOT, 4), seg(AUDIO, 4)]);
+    });
+  });
+});

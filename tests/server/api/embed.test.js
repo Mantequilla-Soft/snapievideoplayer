@@ -304,6 +304,32 @@ describe('GET /api/embed: mobile info response (info=true)', () => {
   });
 });
 
+describe('GET /api/embed: storage_state (S3 archive)', () => {
+  const S3_DIRECT = `https://s3.3speak.tv/videos-test/${CID}/manifest.m3u8`;
+  const S3_ZONE = `https://buttercloud.b-cdn.net/videos-test/${CID}/manifest.m3u8`;
+
+  it('archived: plays from the S3 zone, web and mobile', async () => {
+    await seedEmbed({ permlink: 's3-clip', storage_state: 'archived', s3_url: S3_DIRECT });
+    const web = await request(app).get('/api/embed?v=badadib/s3-clip');
+    expect(web.body.videoUrl).toBe(`${viaHls(S3_ZONE)}&s3=1`);
+    expect(web.body.videoUrlFallback1).toBe(web.body.videoUrl);
+    const info = await request(app).get('/api/embed?v=badadib/s3-clip&info=true');
+    expect(info.body.cid).toBe(`${viaHls(S3_ZONE, 'hls/manifest.m3u8')}&s3=1`);
+  });
+
+  it('hot: the hotnode, flagged', async () => {
+    await seedEmbed({ permlink: 's3-hot-clip', storage_state: 'hot', s3_url: S3_DIRECT });
+    const res = await request(app).get('/api/embed?v=badadib/s3-hot-clip');
+    expect(res.body.videoUrl).toBe(`${viaHls(MASTER)}&s3=1`);
+  });
+
+  it('a placeholder ignores storage_state', async () => {
+    await seedEmbed({ permlink: 's3-gone', status: 'deleted', storage_state: 'archived', s3_url: S3_DIRECT });
+    const res = await request(app).get('/api/embed?v=badadib/s3-gone');
+    expect(res.body.videoUrl).toBe(viaHls('https://gw.test/ipfs/QmDeleted/manifest.m3u8'));
+  });
+});
+
 describe('GET /api/embed: database failure', () => {
   it('500 with a generic error', async () => {
     const db = serverDb();
