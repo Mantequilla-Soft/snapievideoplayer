@@ -341,7 +341,9 @@ from an IPFS fallback.
 }
 ```
 
-Native HLS on iOS doesn't expose its requests, so nothing is reported there.
+Only playlists and media segments are reported; encryption keys and init maps
+are not. Native HLS on iOS doesn't expose its requests, so nothing is reported
+there.
 
 ### Auto-Embed Detection (Legacy Method)
 

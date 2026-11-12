@@ -18,6 +18,7 @@ export const SOURCE_MESSAGE = '3speak-source';
 export const SOURCE_HEADER = 'x-snapie-source';
 
 const PLAYLIST_RE = /\.m3u8$/i;
+const MEDIA_REQUESTS = new Set(['hls-playlist', 'segment']);
 
 function headerOf(request, response, name) {
   const h = response && response.headers;
@@ -36,6 +37,11 @@ function headerOf(request, response, name) {
  * always has /ipfs/… or /<bucket>/<cid>/… there instead.
  */
 export function describeResponse(request, error, response, selfOrigin) {
+  // Only playlists and media segments say where the video plays from: keys, init
+  // maps and steering manifests can sit elsewhere. VHS tags each request; an
+  // untagged one (an older VHS) is classified by its URL below.
+  const type = request && request.requestType;
+  if (type && !MEDIA_REQUESTS.has(type)) return null;
   const raw = (request && request.responseURL) || (response && (response.responseUrl || response.url)) || (request && request.uri);
   let final;
   try { final = new URL(raw, selfOrigin); } catch (_) { return null; }
@@ -48,7 +54,9 @@ export function describeResponse(request, error, response, selfOrigin) {
     return { kind: 'playlist', url: named || upstream, proxied: true, confirmed: !!named, ok, status };
   }
   if (final.pathname === '/ipfs-proxy') {
-    return { kind: 'segment', url: upstream, proxied: true, confirmed: true, ok, status };
+    // It may have served the bytes from another gateway than the one in u=.
+    const named = headerOf(request, response, SOURCE_HEADER);
+    return { kind: 'segment', url: named || upstream, proxied: true, confirmed: !!named, ok, status };
   }
   if (final.pathname.startsWith('/seg/')) {
     // Still on /seg: the redirect never happened (the request failed before it).

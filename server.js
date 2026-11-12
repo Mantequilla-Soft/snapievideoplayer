@@ -659,6 +659,9 @@ app.get('/ipfs-proxy', async (req, res) => {
       // A CID addresses immutable bytes, so this caches hard — and anything the edge
       // or the browser keeps is bandwidth we do not pay for twice.
       res.set('Cache-Control', 'public, max-age=31536000, immutable');
+      // The gateway that served it, which may not be the one in u= (src/sourceReport.js).
+      res.set('X-Snapie-Source', u);
+      res.set('Access-Control-Expose-Headers', 'X-Snapie-Source');
 
       if (!r.body) return res.end();
       const body = Readable.fromWeb(r.body);

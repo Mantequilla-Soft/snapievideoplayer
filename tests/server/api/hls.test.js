@@ -330,6 +330,8 @@ describe('GET /ipfs-proxy', () => {
     const res = await request(app).get(`/ipfs-proxy?u=${enc(`https://elsewhere.example/ipfs/${CID}/480p/a.ts`)}`);
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('video/mp2t');
+    // Names the gateway that really served it, not the one in u=.
+    expect(res.headers['x-snapie-source']).toBe(at(SUPER, '480p/a.ts'));
     expect(calledUrls(f).every((u) => !u.startsWith('https://elsewhere.example/'))).toBe(true);
   });
 
@@ -359,6 +361,8 @@ describe('GET /ipfs-proxy', () => {
     expect(res.headers['x-private']).toBeUndefined();
     expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
     expect(res.headers['access-control-allow-origin']).toBe('*');
+    expect(res.headers['x-snapie-source']).toBe(at(SUPER, '480p/a.ts'));
+    expect(res.headers['access-control-expose-headers']).toBe('X-Snapie-Source');
     expect(Buffer.compare(res.body, bytes)).toBe(0);
   });
 

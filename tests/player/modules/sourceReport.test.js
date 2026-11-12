@@ -48,9 +48,26 @@ describe('describeResponse', () => {
     expect(describeResponse(req, new Error('x'), res, SELF)).toMatchObject({ kind: 'segment', url: `${ZONE}/480p/480p_3.ts`, confirmed: false, ok: false, status: 502 });
   });
 
-  it('/ipfs-proxy bytes are proxied, from the gateway in u=', () => {
+  it('/ipfs-proxy bytes report the gateway the proxy named, which may not be the one in u=', () => {
+    const [req, res] = xhr(`${SELF}/ipfs-proxy?u=${enc('https://ipfs.3speak.tv/ipfs/q/1.ts')}`, {
+      headers: { 'x-snapie-source': 'https://ipfs-audio.3speak.tv/ipfs/q/1.ts' },
+    });
+    expect(describeResponse(req, null, res, SELF)).toMatchObject({ kind: 'segment', url: 'https://ipfs-audio.3speak.tv/ipfs/q/1.ts', proxied: true, confirmed: true });
+  });
+
+  it('/ipfs-proxy without the header: u=, unconfirmed', () => {
     const [req, res] = xhr(`${SELF}/ipfs-proxy?u=${enc('https://ipfs.3speak.tv/ipfs/q/1.ts')}`);
-    expect(describeResponse(req, null, res, SELF)).toMatchObject({ kind: 'segment', url: 'https://ipfs.3speak.tv/ipfs/q/1.ts', proxied: true });
+    expect(describeResponse(req, null, res, SELF)).toMatchObject({ url: 'https://ipfs.3speak.tv/ipfs/q/1.ts', confirmed: false });
+  });
+
+  it('only playlists and media segments are reported: keys, init maps and the rest are not', () => {
+    const tagged = (requestType, url) => { const [req, res] = xhr(url); req.requestType = requestType; return describeResponse(req, null, res, SELF); };
+    expect(tagged('hls-playlist', `${ZONE}/manifest.m3u8`)).toMatchObject({ kind: 'playlist' });
+    expect(tagged('segment', `${ZONE}/480p/0.ts`)).toMatchObject({ kind: 'segment' });
+    expect(tagged('segment-key', 'https://keys.test/k1')).toBeNull();
+    expect(tagged('segment-key', `${SELF}/ipfs-proxy?u=${enc('https://ipfs.3speak.tv/ipfs/q/k.key')}`)).toBeNull();
+    expect(tagged('segment-media-initialization', `${ZONE}/480p/init.mp4`)).toBeNull();
+    expect(tagged('content-steering-manifest', 'https://steer.test/x')).toBeNull();
   });
 
   it('a direct URL is a playlist or a segment by its extension', () => {
