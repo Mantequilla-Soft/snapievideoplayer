@@ -325,11 +325,25 @@ function timelinePostRef(video, isEmbed, owner, permlink) {
 // `path` lets native-player callers get a URL whose last path segment ends in .m3u8 —
 // ExoPlayer infers HLS from the extension and treats a bare `/hls` as a progressive file.
 // `s3` (from storagePlan) tells /hls the video has a copy in the S3 bucket.
-function proxiedManifest(url, path = 'hls', { s3 = false } = {}) {
+// `strict` (see strictPlayback) tells /hls to fetch `url` and its children from that
+// one source only, with no race and no fallback.
+function proxiedManifest(url, path = 'hls', { s3 = false, strict = false } = {}) {
   if (!url || typeof url !== 'string' || !/\.m3u8(\?|$)/i.test(url)) return url;
   // Our own files (the expired-story clip) need no gateway race.
   if (url.startsWith(`${SELF_BASE}/`)) return url;
-  return `${SELF_BASE}/${path}?u=${encodeURIComponent(url)}${s3 ? '&s3=1' : ''}`;
+  return `${SELF_BASE}/${path}?u=${encodeURIComponent(url)}${s3 ? '&s3=1' : ''}${strict ? '&strict=1' : ''}`;
+}
+
+/**
+ * `?strict=1` on /api/watch or /api/embed: play only from the source storagePlan
+ * assigned (the S3 zone for an archived video, the hot zone for a hot one), never
+ * a fallback. For checking that a copy really works (the S3 migrator's preview);
+ * a viewer gains nothing from it, and anyone who sets it only loses their own
+ * fallbacks. Only for a video with an S3 copy: a plain IPFS video has no single
+ * assigned source, so it plays as usual and `strict` comes back false.
+ */
+function strictPlayback(req, result) {
+  return req.query.strict === '1' && result.s3 === true && !result.isPlaceholder;
 }
 
 // True if a CODECS="..." string lists a video codec. Old 3Speak encodes wrongly
@@ -446,6 +460,7 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
     return res.status(400).send('bad manifest url');
   }
   const hasS3 = !!inBucket || (req.query.s3 === '1' && !!S3_BUCKET);
+  const strict = req.query.strict === '1';
   // The path after /ipfs/ (CID + file) is gateway-independent — try it everywhere.
   // An S3 path is the same CID + file under the bucket.
   const { cidPath, candidates } = gatewayCandidates(
@@ -455,7 +470,8 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
 
   const fetchManifest = async (u) => {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), s3Parts(u) ? S3_FETCH_TIMEOUT_MS : HLS_FETCH_TIMEOUT_MS);
+    // The short S3 timeout is there to move on to the next source; strict has none.
+    const timer = setTimeout(() => ac.abort(), s3Parts(u) && !strict ? S3_FETCH_TIMEOUT_MS : HLS_FETCH_TIMEOUT_MS);
     try {
       const r = await fetch(u, { redirect: 'follow', signal: ac.signal });
       if (!r.ok) throw new Error(`status ${r.status}`);
@@ -493,6 +509,14 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
     ]
   ).filter((t) => t && t.length && t.every(Boolean));
 
+  // Strict: exactly `u` (as validated above), on its own host. No race, no S3 or IPFS
+  // fallback, and its children stay on that host too (childUrl below).
+  if (strict) {
+    const only = inBucket ? s3Url(inBucket.host, cidPath) : (candidates[0] === upstream ? upstream : null);
+    if (!only) return res.status(400).send('bad manifest url');
+    tiers.splice(0, tiers.length, [only]);
+  }
+
   let hit;
   for (const tier of tiers) {
     try {
@@ -524,7 +548,7 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
     // to the CDN exactly as before and this path goes cold on its own. Nothing to
     // revert when the zones come back.
     const viaSelf = !corsOk(hit.url);
-    const flag = hasS3 ? '&s3=1' : '';
+    const flag = `${hasS3 ? '&s3=1' : ''}${strict ? '&strict=1' : ''}`;
     const childUrl = (u) => {
       const a = abs(u);
       const childInBucket = !!s3Parts(a);
@@ -533,11 +557,13 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
       // (3. above). An S3 child sends CORS, so it never needs /ipfs-proxy.
       if (!viaSelf || childInBucket) {
         if (isPlaylistUrl(a)) return `${SELF_BASE}/hls?u=${encodeURIComponent(a)}${flag}`;
+        // Strict: the segment straight from this host, without /seg's choice.
+        if (strict) return a;
         return isSegmentUrl(a) ? `${segmentRouteUrl(SELF_BASE, a)}${flag}` : a;
       }
       // A nested playlist goes back through /hls so it gets the same treatment
       // (codec fix + this rewrite) one level down; everything else is bytes.
-      return `${SELF_BASE}/${/\.m3u8(\?|$)/i.test(a) ? 'hls' : 'ipfs-proxy'}?u=${encodeURIComponent(a)}`;
+      return `${SELF_BASE}/${/\.m3u8(\?|$)/i.test(a) ? 'hls' : 'ipfs-proxy'}?u=${encodeURIComponent(a)}${strict ? '&strict=1' : ''}`;
     };
 
     const fixed = hit.text.split(/\r?\n/).map((line) => {
@@ -622,7 +648,9 @@ app.get('/ipfs-proxy', async (req, res) => {
     return res.status(400).send('bad ipfs url');
   }
 
-  const { cidPath, candidates } = gatewayCandidates(upstream);
+  const { cidPath, candidates: all } = gatewayCandidates(upstream);
+  // Strict (from a strict /hls): only the gateway named in u=, never another.
+  const candidates = req.query.strict === '1' ? all.filter((u) => u === upstream) : all;
   if (!candidates.length) return res.status(400).send('bad ipfs url');
 
   // Range matters: hls.js issues byte-range requests for #EXT-X-BYTERANGE media and
@@ -947,6 +975,7 @@ app.get('/api/watch', async (req, res) => {
     }
 
     // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
+    const play = { ...result, strict: strictPlayback(req, result) };
     // Chapters + link toasters from the Hive post. Bounded wait — see timelineFields.
     // Not on a placeholder: those play a stand-in clip, not the creator's video.
     const tlRef = timelinePostRef(video, isEmbed, owner, permlink);
@@ -970,14 +999,15 @@ app.get('/api/watch', async (req, res) => {
         title: video.originalFilename || `${video.owner}/${video.permlink}`,
         status: video.status,
         isPlaceholder: result.isPlaceholder,
-        videoUrl: proxiedManifest(result.urls.primary, 'hls', result),
+        strict: play.strict, // from the assigned source only (strictPlayback)
+        videoUrl: proxiedManifest(result.urls.primary, 'hls', play),
         // /hls races every gateway internally, so the player needs no separate fallback
         // chain. Equal fallbacks make the SDK drop them (it skips any === videoUrl) and
         // fire its fatal error promptly once the single /hls source is exhausted — that's
         // what drives the watch page's "no longer available" hint.
-        videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', result),
-        videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', result),
-        videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', result),
+        videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', play),
+        videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', play),
+        videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', play),
         thumbnail: thumbnail,
         duration: video.duration || 0,
         views: video.views || 0,
@@ -998,17 +1028,18 @@ app.get('/api/watch', async (req, res) => {
         description: video.description || '',
         status: video.status,
         isPlaceholder: result.isPlaceholder,
+        strict: play.strict, // from the assigned source only (strictPlayback)
         thumbnail: video.thumbnail
           ? transformIPFSUrl(video.thumbnail)
           : `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`,
-        videoUrl: proxiedManifest(result.urls.primary, 'hls', result),
+        videoUrl: proxiedManifest(result.urls.primary, 'hls', play),
         // /hls races every gateway internally, so the player needs no separate fallback
         // chain. Equal fallbacks make the SDK drop them (it skips any === videoUrl) and
         // fire its fatal error promptly once the single /hls source is exhausted — that's
         // what drives the watch page's "no longer available" hint.
-        videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', result),
-        videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', result),
-        videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', result),
+        videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', play),
+        videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', play),
+        videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', play),
         duration: video.duration || 0,
         views: video.views || 0,
         tags: video.tags_v2 || video.tags || [],
@@ -1078,6 +1109,7 @@ app.get('/api/embed', async (req, res) => {
     }
     
     // ===== WEB PLAYER RESPONSE (full data with fallbacks) =====
+    const play = { ...result, strict: strictPlayback(req, result) };
     const thumbnail = isExpiredStory(video)
       ? `${SELF_BASE}${STORY_EXPIRED_POSTER}`
       : (video.thumbnail_url || `${process.env.IPFS_GATEWAY}/${process.env.DEFAULT_THUMBNAIL_CID}`);
@@ -1115,12 +1147,13 @@ app.get('/api/embed', async (req, res) => {
       title: video.originalFilename || `${video.owner}/${video.permlink}`,
       status: video.status,
       isPlaceholder: result.isPlaceholder,
-      videoUrl: proxiedManifest(result.urls.primary, 'hls', result),
+      strict: play.strict, // from the assigned source only (strictPlayback)
+      videoUrl: proxiedManifest(result.urls.primary, 'hls', play),
       // /hls races every gateway internally, so equal fallbacks make the SDK drop its
       // separate chain and fire its fatal error promptly — see the /api/watch blocks.
-      videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', result),
-      videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', result),
-      videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', result),
+      videoUrlFallback1: proxiedManifest(result.urls.primary, 'hls', play),
+      videoUrlFallback2: proxiedManifest(result.urls.primary, 'hls', play),
+      videoUrlFallback3: proxiedManifest(result.urls.primary, 'hls', play),
       thumbnail: thumbnail,
       duration: video.duration || 0,
       views: video.views || 0,

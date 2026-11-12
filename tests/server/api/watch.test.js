@@ -87,6 +87,7 @@ describe('GET /api/watch: legacy video, web player response', () => {
       description: 'About it',
       status: 'published',
       isPlaceholder: false,
+      strict: false,
       thumbnail: 'https://gw.test/ipfs/QmLegacyThumb',
       videoUrl: viaHls(MASTER),
       videoUrlFallback1: viaHls(MASTER),
@@ -268,6 +269,7 @@ describe('GET /api/watch: embed fallback, web player response', () => {
       title: 'clip.mp4',
       status: 'published',
       isPlaceholder: false,
+      strict: false,
       videoUrl: viaHls(MASTER),
       videoUrlFallback1: viaHls(MASTER),
       videoUrlFallback2: viaHls(MASTER),
@@ -445,6 +447,34 @@ describe('GET /api/watch: storage_state (S3 archive)', () => {
     await seedLegacy({ permlink: 's3-info', storage_state: 'archived', s3_url: S3_DIRECT });
     const res = await request(app).get('/api/watch?v=badadib/s3-info&info=true');
     expect(res.body.cid).toBe(s3Hls(S3_ZONE, 'hls/manifest.m3u8'));
+  });
+
+  it('strict=1, archived: every URL carries strict, and says so', async () => {
+    await seedLegacy({ permlink: 's3-strict', storage_state: 'archived', s3_url: S3_DIRECT });
+    const res = await request(app).get('/api/watch?v=badadib/s3-strict&strict=1');
+    expect(res.body.strict).toBe(true);
+    expect(urls(res.body)).toEqual(Array(4).fill(`${s3Hls(S3_ZONE)}&strict=1`));
+  });
+
+  it('strict=1, hot with an S3 copy: the hot zone only', async () => {
+    await seedLegacy({ permlink: 's3-hot-strict', storage_state: 'hot', s3_url: S3_DIRECT, hot_nodes: ['hotnode-one'] });
+    const res = await request(app).get('/api/watch?v=badadib/s3-hot-strict&strict=1');
+    expect(res.body.strict).toBe(true);
+    expect(res.body.videoUrl).toBe(`${s3Hls(MASTER)}&strict=1`);
+  });
+
+  it('strict=1 on a plain IPFS video: no single assigned source, so plays as usual', async () => {
+    await seedLegacy({ permlink: 'plain-strict' });
+    const res = await request(app).get('/api/watch?v=badadib/plain-strict&strict=1');
+    expect(res.body.strict).toBe(false);
+    expect(res.body.videoUrl).toBe(viaHls(MASTER));
+  });
+
+  it('strict only as exactly 1, and never on the mobile info response', async () => {
+    await seedLegacy({ permlink: 's3-strict2', storage_state: 'archived', s3_url: S3_DIRECT });
+    expect((await request(app).get('/api/watch?v=badadib/s3-strict2&strict=true')).body.strict).toBe(false);
+    const info = await request(app).get('/api/watch?v=badadib/s3-strict2&strict=1&info=true');
+    expect(info.body.cid).toBe(s3Hls(S3_ZONE, 'hls/manifest.m3u8'));
   });
 
   it.each([

@@ -14,7 +14,7 @@ import { sanitizeTimeline } from '../timeline.js';
 // Only for the shadow element that preloads the banner-free copy — the main player is
 // video.js/VHS and is not touched by this.
 import Hls from 'hls.js';
-import { installSourceReport } from './sourceReport.js';
+import { installSourceReport, setReportContext } from './sourceReport.js';
 
 // Tell an embedding page where each playlist and segment really came from (S3,
 // the hotnode or an IPFS gateway). Only in an iframe; see sourceReport.js.
@@ -1423,15 +1423,18 @@ function getUrlParams() {
     loop: params.get('loop'), // '1' or 'true' to loop video playback
     captions: params.get('captions'), // '0' or 'false' to disable captions
     preview: params.get('preview'), // '0' or 'false' to disable the seek-bar scrub preview (on by default)
-    heatmap: params.get('heatmap') // '0' or 'false' to disable the "most replayed" heatmap (on by default)
+    heatmap: params.get('heatmap'), // '0' or 'false' to disable the "most replayed" heatmap (on by default)
+    // '1': play only from the source the server assigned (the S3 copy of an archived
+    // video), no fallback and no sponsor break. For checking a copy, not for viewers.
+    strict: params.get('strict') === '1'
   };
 }
 
 // Fetch video data from API
-async function fetchVideoData(videoParam, type) {
+async function fetchVideoData(videoParam, type, strict = false) {
   try {
     const endpoint = type === 'embed' ? '/api/embed' : '/api/watch';
-    const url = `${endpoint}?v=${videoParam}`;
+    const url = `${endpoint}?v=${videoParam}${strict ? '&strict=1' : ''}`;
     
     debugLog(`Fetching video data from: ${url}`);
     
@@ -2845,7 +2848,11 @@ async function loadVideoFromData(videoData) {
     // deleted" bills an advertiser for an impression on nothing, and the banner and
     // ticker would run across a notice that has no audience. The server says which it
     // is, so this is the same one-condition skip as the short.
-    const stitched = (videoData.short === true || videoData.isPlaceholder) ? null : await adBreak.request({
+    //
+    // 🚨 NOT WHEN STRICT IS ASKED FOR (?strict=1), whether or not the server could
+    // honour it: a sponsor break swaps in a manifest from the ad server, strict is
+    // there to see where the video itself plays from, and a check is not an audience.
+    const stitched = (videoData.short === true || videoData.isPlaceholder || getUrlParams().strict) ? null : await adBreak.request({
       owner: videoData.owner,
       permlink: videoData.permlink,
       viewer: viewerAccount(),
@@ -3332,7 +3339,7 @@ function showCodecError() {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', async function() {
   // 1. FIRST: Get URL parameters and apply classes BEFORE initializing player
-  const { video, type, noview, live, api, lk, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions, preview, heatmap } = getUrlParams();
+  const { video, type, noview, live, api, lk, mode, layout, debug, noscroll, autoplay, controls, tvmode, mute, loop, captions, preview, heatmap, strict } = getUrlParams();
 
   // Live OpenPods session (`?live=<roomName>`) takes a completely separate
   // path: a WebRTC/LiveKit viewer, NOT the Video.js/HLS pipeline. Branch out
@@ -3460,7 +3467,9 @@ document.addEventListener('DOMContentLoaded', async function() {
   let videoData = null;
   let videoError = null;
   try {
-    videoData = await fetchVideoData(video, type);
+    videoData = await fetchVideoData(video, type, strict);
+    // Every source report says whether the server is really playing strict.
+    setReportContext({ strict: !!videoData && videoData.strict === true });
   } catch (error) {
     videoError = error;
   }
