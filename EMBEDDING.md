@@ -321,6 +321,28 @@ The player sends this message when video metadata loads:
 }
 ```
 
+#### Where the video is playing from
+
+In an iframe, the player also reports every playlist and segment it loads, and
+where the bytes really came from. Playlists come through the player's `/hls`
+proxy and segments through `/seg` redirects, so the URLs in DevTools don't show
+this. The S3 migrator uses it to check that a migrated video plays from S3, not
+from an IPFS fallback.
+
+```javascript
+{
+    type: '3speak-source',
+    kind: 'playlist' | 'segment',
+    url: string,          // the gateway or S3 URL that served it
+    proxied: boolean,     // the bytes came through the player's server
+    confirmed: boolean,   // false: the player could not see the final source (url is what it asked for)
+    ok: boolean,          // false: this request failed
+    status: number        // HTTP status, 0 when there was none
+}
+```
+
+Native HLS on iOS doesn't expose its requests, so nothing is reported there.
+
 ### Auto-Embed Detection (Legacy Method)
 
 To automatically convert 3speak URLs into embedded players:

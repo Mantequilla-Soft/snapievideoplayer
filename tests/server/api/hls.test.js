@@ -109,6 +109,9 @@ describe('GET /hls: master manifest from the hot zone', () => {
     expect(res.headers['content-type']).toMatch(/^application\/vnd\.apple\.mpegurl/);
     expect(res.headers['cache-control']).toBe('public, max-age=300');
     expect(res.headers['access-control-allow-origin']).toBe('*');
+    // Names the gateway that served it, readable cross-origin (src/sourceReport.js).
+    expect(res.headers['x-snapie-source']).toBe(at(HOT, 'manifest.m3u8'));
+    expect(res.headers['access-control-expose-headers']).toBe('X-Snapie-Source');
     expect(res.text.split('\n')).toEqual([
       '#EXTM3U',
       '#EXT-X-VERSION:3',
@@ -177,6 +180,7 @@ describe('GET /hls: gateway race', () => {
     expect(res.status).toBe(200);
     // The fastest CORS gateway becomes the base for the children.
     expect(res.text).toContain(`${SELF}/hls?u=${enc(at(AUDIO, '480p/index.m3u8'))}`);
+    expect(res.headers['x-snapie-source']).toBe(at(AUDIO, 'manifest.m3u8'));
     const urls = calledUrls(f);
     expect(urls[0]).toBe(at(HOT, 'manifest.m3u8'));
     expect(urls.slice(1).sort()).toEqual([at(BCDN, 'manifest.m3u8'), at(AUDIO, 'manifest.m3u8')].sort());
@@ -488,6 +492,8 @@ describe('S3 archive (storage_state, issue #54)', () => {
       const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}`);
       expect(res.status).toBe(200);
       expect(res.text.split('\n')[3]).toBe(`${SELF}/hls?u=${enc(at(BCDN, '480p/index.m3u8'))}&s3=1`);
+      // An archived video playing from IPFS says so: what the migrator's preview looks for.
+      expect(res.headers['x-snapie-source']).toBe(at(BCDN, 'manifest.m3u8'));
       const asked = calledUrls(f);
       expect(asked.slice(0, 2)).toEqual([s3(ZONE, 'manifest.m3u8'), s3(DIRECT, 'manifest.m3u8')]);
       expect(asked).not.toContain(at(SUPER, 'manifest.m3u8'));
