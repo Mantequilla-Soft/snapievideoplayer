@@ -158,6 +158,23 @@ describe('boot: route and URL parameters', () => {
     expect(ab.request).not.toHaveBeenCalled();
   });
 
+  it('?strict=1 is passed to the API and never asks for an ad', async () => {
+    const { fetch, ab } = await boot({ url: '/embed?v=badadib/xyz&strict=1', video: videoFixture({ strict: true }) });
+    expect(calls(fetch, '/api/embed')[0][0]).toBe('/api/embed?v=badadib/xyz&strict=1');
+    expect(ab.request).not.toHaveBeenCalled();
+  });
+
+  it('?strict=1 the server cannot honour (a plain IPFS video): still no ad', async () => {
+    const { ab } = await boot({ url: '/watch?v=badadib/xyz&strict=1', iframe: false, video: videoFixture({ strict: false }) });
+    expect(ab.request).not.toHaveBeenCalled();
+  });
+
+  it('strict only as exactly 1', async () => {
+    const { fetch, ab } = await boot({ url: '/embed?v=badadib/xyz&strict=true' });
+    expect(calls(fetch, '/api/embed')[0][0]).toBe('/api/embed?v=badadib/xyz');
+    expect(ab.request).toHaveBeenCalled();
+  });
+
   it('a short never asks for an ad', async () => {
     const { ab } = await boot({ video: videoFixture({ short: true }) });
     expect(ab.request).not.toHaveBeenCalled();

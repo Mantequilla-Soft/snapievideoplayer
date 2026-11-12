@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { describeResponse, installSourceReport, SOURCE_MESSAGE } from '../../../src/sourceReport.js';
+import { describeResponse, installSourceReport, setReportContext, SOURCE_MESSAGE } from '../../../src/sourceReport.js';
 
 const SELF = 'https://play.test';
 const CID = 'QmRSjgN5L4ypwqLYANPALx6Eo4xRr4iGg9xZM1kKdKYgBM';
@@ -85,6 +85,18 @@ describe('installSourceReport', () => {
     call(`${ZONE}/480p/480p_1.ts`);
     expect(post).toHaveBeenCalledTimes(2);
     expect(post.mock.calls[1][0]).toMatchObject({ type: SOURCE_MESSAGE, kind: 'segment', url: `${ZONE}/480p/480p_1.ts` });
+  });
+
+  it('every report carries the playback context (strict), false until it is set', () => {
+    const Vhs = fakeVhs();
+    const post = vi.fn();
+    installSourceReport(Vhs, post, SELF);
+    const call = (url) => { const [req, res] = xhr(url); Vhs.hooks[0](req, null, res); };
+    call(`${ZONE}/480p/480p_0.ts`);
+    setReportContext({ strict: true });
+    call(`${ZONE}/480p/480p_1.ts`);
+    expect(post.mock.calls.map((c) => c[0].strict)).toEqual([false, true]);
+    setReportContext({ strict: false });
   });
 
   it('installs once per VHS, and not at all without the hook API', () => {

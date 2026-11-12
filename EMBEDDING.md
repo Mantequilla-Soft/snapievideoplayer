@@ -61,6 +61,7 @@ https://play.3speak.tv/embed?v=owner/permlink
 - `mode=iframe` - **Optional**: Enables minimal UI for embedding (hides header and info panel)
 - `layout` - **Optional**: Force specific container layout (see below)
 - `noscroll=1` - **Optional**: Disables all scrollbars inside the iframe (perfect for fixed-size containers)
+- `strict=1` - **Optional, for checking only**: play only from the source the server assigned to this video, with no fallback and no sponsor break. That is the S3 copy for an archived video, or the hotnode for a hot one. If that source fails, playback fails, which is the point. A video without an S3 copy has no single assigned source and plays as usual. The API's `strict` field says whether strict playback is on. The S3 migrator's preview uses it; viewers shouldn't.
 
 ### Layout Parameter (for Mobile Apps)
 
@@ -337,7 +338,8 @@ from an IPFS fallback.
     proxied: boolean,     // the bytes came through the player's server
     confirmed: boolean,   // false: the player could not see the final source (url is what it asked for)
     ok: boolean,          // false: this request failed
-    status: number        // HTTP status, 0 when there was none
+    status: number,       // HTTP status, 0 when there was none
+    strict: boolean       // the server is playing from the assigned source only (strict=1)
 }
 ```
 

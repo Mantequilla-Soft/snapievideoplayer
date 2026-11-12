@@ -76,6 +76,7 @@ describe('GET /api/embed: published video', () => {
       title: 'clip.mp4',
       status: 'published',
       isPlaceholder: false,
+      strict: false,
       videoUrl: viaHls(MASTER),
       videoUrlFallback1: viaHls(MASTER),
       videoUrlFallback2: viaHls(MASTER),
@@ -197,6 +198,7 @@ describe('GET /api/embed: 24h stories', () => {
     expect(maxAge).toBeLessThanOrEqual(120);
     expect(res.body).toMatchObject({
       isPlaceholder: false,
+      strict: false,
       videoUrl: viaHls(MASTER),
       story: true,
       storyExpiresAt: at.toISOString(),
@@ -321,6 +323,15 @@ describe('GET /api/embed: storage_state (S3 archive)', () => {
     await seedEmbed({ permlink: 's3-hot-clip', storage_state: 'hot', s3_url: S3_DIRECT });
     const res = await request(app).get('/api/embed?v=badadib/s3-hot-clip');
     expect(res.body.videoUrl).toBe(`${viaHls(MASTER)}&s3=1`);
+  });
+
+  it('strict=1: the S3 zone only, and a placeholder is never strict', async () => {
+    await seedEmbed({ permlink: 's3-strict-clip', storage_state: 'archived', s3_url: S3_DIRECT });
+    const web = await request(app).get('/api/embed?v=badadib/s3-strict-clip&strict=1');
+    expect(web.body.strict).toBe(true);
+    expect(web.body.videoUrl).toBe(`${viaHls(S3_ZONE)}&s3=1&strict=1`);
+    await seedEmbed({ permlink: 's3-gone-strict', status: 'deleted', storage_state: 'archived', s3_url: S3_DIRECT });
+    expect((await request(app).get('/api/embed?v=badadib/s3-gone-strict&strict=1')).body.strict).toBe(false);
   });
 
   it('a placeholder ignores storage_state', async () => {

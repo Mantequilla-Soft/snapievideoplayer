@@ -325,6 +325,15 @@ describe('GET /ipfs-proxy', () => {
     expect(res.text).not.toContain('secret');
   });
 
+  it('strict: only the gateway in u=, a 502 rather than another gateway', async () => {
+    const f = installFetch((url) => (url === at(SUPER, '480p/a.ts') ? text('gone', 404) : text('bytes')));
+    const res = await request(app).get(`/ipfs-proxy?u=${enc(at(SUPER, '480p/a.ts'))}&strict=1`);
+    expect(res.status).toBe(502);
+    expect(calledUrls(f)).toEqual([at(SUPER, '480p/a.ts')]);
+    const elsewhere = await request(app).get(`/ipfs-proxy?u=${enc(`https://elsewhere.example/ipfs/${CID}/480p/a.ts`)}&strict=1`);
+    expect(elsewhere.status).toBe(400);
+  });
+
   it('serves an object named on an unknown host from our gateways instead', async () => {
     const f = installFetch((url) => (url === at(SUPER, '480p/a.ts') ? text('bytes') : text('gone', 404)));
     const res = await request(app).get(`/ipfs-proxy?u=${enc(`https://elsewhere.example/ipfs/${CID}/480p/a.ts`)}`);
@@ -469,6 +478,52 @@ describe('S3 archive (storage_state, issue #54)', () => {
       gateways({ [s3(ZONE, '480p/index.m3u8')]: S3_VARIANT });
       const res = await request(app).get(`/hls?u=${enc(s3(ZONE, '480p/index.m3u8'))}&s3=1`);
       expect(res.text.split('\n')[3]).toBe(`${SELF}/seg/480p_0.ts?u=${enc(s3(ZONE, '480p/480p_0.ts'))}&s3=1`);
+    });
+
+    describe('strict=1: the assigned source only', () => {
+      it('the zone manifest, children strict on the same host, segments direct (no /seg)', async () => {
+        const f = gateways({ [s3(ZONE, 'manifest.m3u8')]: MASTER });
+        const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}&s3=1&strict=1`);
+        expect(res.status).toBe(200);
+        expect(res.headers['x-snapie-source']).toBe(s3(ZONE, 'manifest.m3u8'));
+        expect(res.text.split('\n')[3]).toBe(`${SELF}/hls?u=${enc(s3(ZONE, '480p/index.m3u8'))}&s3=1&strict=1`);
+        expect(calledUrls(f)).toEqual([s3(ZONE, 'manifest.m3u8')]);
+        gateways({ [s3(ZONE, '480p/index.m3u8')]: S3_VARIANT });
+        const variant = await request(app).get(`/hls?u=${enc(s3(ZONE, '480p/index.m3u8'))}&s3=1&strict=1`);
+        expect(variant.text.split('\n')[3]).toBe(s3(ZONE, '480p/480p_0.ts'));
+      });
+
+      it('the zone refuses: 504, never the bucket direct or IPFS', async () => {
+        const f = gateways({ [s3(ZONE, 'manifest.m3u8')]: 403, [s3(DIRECT, 'manifest.m3u8')]: MASTER, [at(BCDN, 'manifest.m3u8')]: MASTER });
+        const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}&s3=1&strict=1`);
+        expect(res.status).toBe(504);
+        expect(calledUrls(f)).toEqual([s3(ZONE, 'manifest.m3u8')]);
+      });
+
+      it('waits HLS_FETCH_TIMEOUT_MS, not the short S3 one, since there is nothing to move on to', async () => {
+        gateways({ [s3(ZONE, 'manifest.m3u8')]: async () => { await delay(400); return text(MASTER); } });
+        const res = await request(app).get(`/hls?u=${enc(s3(ZONE, 'manifest.m3u8'))}&strict=1`);
+        expect(res.status).toBe(200);
+      });
+
+      it('an IPFS source: that gateway only, no race', async () => {
+        const f = gateways({ [at(HOT, 'manifest.m3u8')]: 404, [at(BCDN, 'manifest.m3u8')]: MASTER, [s3(ZONE, 'manifest.m3u8')]: MASTER });
+        const res = await request(app).get(`/hls?u=${enc(at(HOT, 'manifest.m3u8'))}&s3=1&strict=1`);
+        expect(res.status).toBe(504);
+        expect(calledUrls(f)).toEqual([at(HOT, 'manifest.m3u8')]);
+      });
+
+      it('a non-CORS source sends its children through a strict /ipfs-proxy', async () => {
+        gateways({ [at(SUPER, '480p/index.m3u8')]: VARIANT });
+        const res = await request(app).get(`/hls?u=${enc(at(SUPER, '480p/index.m3u8'))}&strict=1`);
+        expect(res.text).toContain(`${SELF}/ipfs-proxy?u=${enc(at(SUPER, '480p/480p_0.ts'))}&strict=1`);
+      });
+
+      it('a gateway outside the list is not accepted as the source', async () => {
+        installFetch();
+        const res = await request(app).get(`/hls?u=${enc(`https://elsewhere.example/ipfs/${CID}/manifest.m3u8`)}&strict=1`);
+        expect(res.status).toBe(400);
+      });
     });
 
     it('the zone refuses (out of credit): plays from the bucket direct', async () => {

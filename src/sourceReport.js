@@ -11,6 +11,8 @@
  *   url        where the bytes came from (the gateway or bucket URL, never ours)
  *   proxied    the bytes came through this server (/ipfs-proxy, or the /hls rewrite)
  *   confirmed  false only for a playlist whose /hls answer did not name its source
+ *   strict     the server is playing this video from its assigned source only
+ *              (?strict=1, and the video has one); false until the video data is in
  * Only URLs a viewer could read in DevTools; nothing is sent outside an iframe.
  */
 
@@ -61,6 +63,12 @@ export function describeResponse(request, error, response, selfOrigin) {
 }
 
 const installed = new WeakSet();
+let context = { strict: false };
+
+/** Facts about the whole playback, added to every report (main.js sets `strict`). */
+export function setReportContext(next) {
+  context = { ...context, ...next };
+}
 
 /**
  * Hook VHS's global response hooks once. `post` receives each report. Does nothing
@@ -73,7 +81,7 @@ export function installSourceReport(Vhs, post, selfOrigin) {
   xhr.onResponse((request, error, response) => {
     try {
       const report = describeResponse(request, error, response, selfOrigin);
-      if (report && report.url) post({ type: SOURCE_MESSAGE, ...report });
+      if (report && report.url) post({ type: SOURCE_MESSAGE, ...report, ...context });
     } catch (_) { /* reporting must never break playback */ }
   });
   return true;
