@@ -14,6 +14,13 @@ import { sanitizeTimeline } from '../timeline.js';
 // Only for the shadow element that preloads the banner-free copy — the main player is
 // video.js/VHS and is not touched by this.
 import Hls from 'hls.js';
+import { installSourceReport } from './sourceReport.js';
+
+// Tell an embedding page where each playlist and segment really came from (S3,
+// the hotnode or an IPFS gateway). Only in an iframe; see sourceReport.js.
+if (window.parent !== window) {
+  installSourceReport(videojs.Vhs, (m) => window.parent.postMessage(m, '*'), window.location.origin);
+}
 
 // Register plugins once
 if (!videojs.getPlugin('qualityLevels')) {

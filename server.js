@@ -559,6 +559,9 @@ app.get(['/hls', '/hls/manifest.m3u8'], async (req, res) => {
     }).join('\n');
     res.set('Content-Type', 'application/vnd.apple.mpegurl');
     res.set('Cache-Control', 'public, max-age=300');
+    // Where this playlist really came from, for an embedding page (src/sourceReport.js).
+    res.set('X-Snapie-Source', hit.url);
+    res.set('Access-Control-Expose-Headers', 'X-Snapie-Source');
     return res.send(fixed);
   } catch (_) {
     return res.redirect(302, hit.url); // rewrite bug, but this manifest was reachable
