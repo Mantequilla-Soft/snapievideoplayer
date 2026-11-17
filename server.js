@@ -155,10 +155,13 @@ const SELF_BASE = (process.env.PUBLIC_BASE_URL || 'https://preview-player.okinok
 // Live OpenPods stream endpoints, probed (in order) when a `?v=` has no video
 // entry. Same URL scheme as any embed — the player resolves video-vs-stream so
 // integrators change nothing. Env `STREAM_ENDPOINTS` is a comma-separated list
-// of "apiBase|livekitWsUrl" pairs; defaults cover preview (okinoko) + the
-// official public hangouts API.
+// of "apiBase|livekitWsUrl" pairs; defaults cover production (live.3speak.tv,
+// where 3speak.tv and preview.3speak.tv stream since 2026-10-18), preview's old
+// okinoko server and the older public hangouts API. Without live.3speak.tv a
+// running stream there answered { endedStream: true }: "This stream has
+// already ended" in every embed while the stream was live.
 const STREAM_ENDPOINTS = (process.env.STREAM_ENDPOINTS
-  || 'https://hangouts.okinoko.io|wss://livekit.okinoko.io,https://hangout-api.3speak.tv|wss://livekit.3speak.tv')
+  || 'https://live.3speak.tv|wss://live.3speak.tv,https://hangouts.okinoko.io|wss://livekit.okinoko.io,https://hangout-api.3speak.tv|wss://livekit.3speak.tv')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean)

@@ -34,7 +34,7 @@ vi.mock('../../../src/liveChat.js', () => ({ mountLiveChat: (...args) => lk.chat
 
 const { initLiveSession } = await import('../../../src/live.js');
 
-const API = 'https://hangouts.okinoko.io';
+const API = 'https://live.3speak.tv';
 let wrapper;
 let video;
 
@@ -103,7 +103,7 @@ describe('initLiveSession: setup', () => {
     expect(net.calls[0].opts).toMatchObject({ method: 'POST', body: '{}' });
     expect(r).toBe(room());
     expect(r.opts).toEqual({ adaptiveStream: true, dynacast: true });
-    expect(r.connect).toHaveBeenCalledWith('wss://livekit.okinoko.io', 'tok-1');
+    expect(r.connect).toHaveBeenCalledWith('wss://live.3speak.tv', 'tok-1');
   });
 
   it('uses the API and LiveKit URLs it is given', async () => {

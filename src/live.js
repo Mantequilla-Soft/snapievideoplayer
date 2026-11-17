@@ -16,10 +16,11 @@ import { Room, RoomEvent, Track } from 'livekit-client';
 import { playLivePreroll } from './livePreroll.js';
 import { mountLiveChat } from './liveChat.js';
 
-// Preview defaults — match what preview.3speak.tv's OpenPods uses. An embedder
-// can override per-URL with `?api=` and `?lk=`.
-const DEFAULT_API = 'https://hangouts.okinoko.io';
-const DEFAULT_LK = 'wss://livekit.okinoko.io';
+// Defaults: the production streaming server (live.3speak.tv), where 3speak.tv
+// and preview.3speak.tv stream. An embedder can override per-URL with `?api=`
+// and `?lk=`.
+const DEFAULT_API = 'https://live.3speak.tv';
+const DEFAULT_LK = 'wss://live.3speak.tv';
 
 function el(tag, className, styles) {
   const node = document.createElement(tag);
