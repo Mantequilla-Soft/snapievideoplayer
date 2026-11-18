@@ -82,8 +82,14 @@ describe('audio playlist behind a video link', () => {
     expect((await watch(`badadib/${LIST_UUID}`)).body.audioEmbed).toBe(`${AUDIO}?list=${LIST_UUID}`);
   });
 
-  it('not a video playlist, an untyped one without audio, a private one or another owner', async () => {
-    await seedPlaylist({ _id: LIST_UUID, type: 'video' });
+  it('a playlist typed "video" (the indexer default) counts when it holds audio', async () => {
+    await seedAudio();
+    await seedPlaylist({ _id: LIST_UUID, type: 'video', items: [{ author: 'badadib', permlink: 'my-podcast-ep-1', position: 0 }] });
+    expect((await watch(`badadib/${LIST_UUID}`)).body.audioEmbed).toBe(`${AUDIO}?list=${LIST_UUID}`);
+  });
+
+  it('not a playlist of only videos, a private one or another owner', async () => {
+    await seedPlaylist({ _id: LIST_UUID, type: 'video', items: [{ author: 'badadib', permlink: 'vid' }] });
     await seedPlaylist({ _id: 'aaaaaaaa-1111', type: undefined, items: [{ author: 'badadib', permlink: 'vid' }] });
     await seedPlaylist({ _id: 'bbbbbbbb-2222', access: 'private' });
     await seedPlaylist({ _id: 'cccccccc-3333', owner: 'ashenadib' });

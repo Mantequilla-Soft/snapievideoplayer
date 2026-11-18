@@ -9,7 +9,7 @@
  * openAudioEmbed). No audio player lives in this repo: it only points the way.
  *
  *   v=<owner>/<audio permlink or its Hive post permlink>  ->  /play?a=<audio permlink>
- *   v=<owner>/<public playlist id>                        ->  /play?list=<playlist id>
+ *   v=<owner>/<public playlist id, audio in it>           ->  /play?list=<playlist id>
  *
  * Only consulted after the video lookups missed, so videos pay nothing for it.
  */
@@ -37,9 +37,11 @@ async function findAudioPlaylist(db, owner, id) {
     { _id: id, owner, access: 'public' },
     { projection: { type: 1, items: { $slice: PLAYLIST_PROBE_ITEMS } } }
   );
-  if (!list || list.type === 'video') return null;
+  if (!list) return null;
+  // `type` cannot be trusted: the playlist indexer writes 'video' by default, so most
+  // playlists of audio say 'video'. Like snapieaudio and the 3speak.tv Embed button,
+  // decide by the items: a playlist counts once one of them is an audio.
   if (list.type !== 'audio') {
-    // Untyped (older) playlists: an audio one only if some item is an audio.
     const refs = (list.items || []).filter((i) => i && i.author && i.permlink);
     if (!refs.length) return null;
     const hit = await db.collection(AUDIO_COLLECTION).findOne(
