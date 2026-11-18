@@ -18,9 +18,11 @@
  *    so Video.js only sees a narrower player and its overlays stay where they were.
  *    In an embed the player then fills the frame's height instead of shrinking with
  *    its width. Closed with its x, opened again with the list button.
- *  - It starts open wherever it docks. Where docking would leave too little video
- *    (fullscreen, a fixed app layout, a frame narrower than DOCK_MIN_WIDTH), the same
- *    list lies OVER the right side of the video instead, and starts closed.
+ *  - It starts open wherever it docks. On a narrow page (a phone, not an embed) it
+ *    sits BELOW the video instead, open too: beside, it would leave the video tiny.
+ *  - Where neither fits (fullscreen, a fixed app layout, an embed narrower than
+ *    DOCK_MIN_WIDTH), the same list lies OVER the right side of the video, and
+ *    starts closed.
  */
 
 // Docked from this frame width up (Ecency, Waves and Snapie embeds included); the
@@ -142,36 +144,53 @@ export function mountPlaylist(player, list, playItem) {
   const wrapper = playerEl.parentElement;
   const wasFluid = typeof player.fluid === 'function' ? !!player.fluid() : false;
   const embedded = document.body.classList.contains('iframe-mode') || document.documentElement.classList.contains('iframe-mode');
-  const canDock = () => !player.isFullscreen()
-    && !FIXED_LAYOUTS.some((c) => document.body.classList.contains(c))
-    && !!wrapper && wrapper.clientWidth >= DOCK_MIN_WIDTH;
+  // Where the list fits: 'beside' the video, 'below' it (a narrow page) or 'over' it.
+  const fits = () => {
+    if (player.isFullscreen() || FIXED_LAYOUTS.some((c) => document.body.classList.contains(c)) || !wrapper) return 'over';
+    if (wrapper.clientWidth >= DOCK_MIN_WIDTH) return 'beside';
+    return embedded ? 'over' : 'below';
+  };
 
-  let open = canDock();
-  let docked = null; // where the list sits now: true beside, false over the video
+  let open = fits() !== 'over';
+  let placed = null; // where the list sits now
 
-  // Put the list beside the player or over the video, and size the player to match.
+  // Put the list beside, below or over the video, and size the player to match.
   function place() {
-    const dock2 = open && canDock();
-    if (dock2 !== docked) {
-      docked = dock2;
-      dock.classList.toggle('is-overlay', !docked);
-      if (docked) wrapper.appendChild(dock);
+    const where = open ? fits() : 'over';
+    if (where !== placed) {
+      placed = where;
+      const outside = where !== 'over';
+      dock.classList.toggle('is-overlay', !outside);
+      dock.classList.toggle('is-below', where === 'below');
+      if (outside) wrapper.appendChild(dock);
       else playerEl.appendChild(dock);
-      wrapper?.classList.toggle('has-playlist-dock', docked);
+      wrapper?.classList.toggle('has-playlist-dock', where === 'beside');
+      wrapper?.classList.toggle('has-playlist-below', where === 'below');
       // In an embed the frame is the box: the player fills its height beside the
       // list rather than shrinking with its width. Back to fluid once undocked.
       if (embedded && wasFluid) {
-        if (docked) { player.fluid(false); player.fill(true); } else { player.fill(false); player.fluid(true); }
+        if (where === 'beside') { player.fluid(false); player.fill(true); } else { player.fill(false); player.fluid(true); }
       }
     }
     dock.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
   }
 
+  // Scroll the LIST to the current card. Not scrollIntoView: that scrolls the page
+  // too, and the list below the video on a phone would jump the page on load.
+  function reveal() {
+    const c = cards[list.index];
+    if (!open || !c) return;
+    const top = c.offsetTop;
+    const bottom = top + c.offsetHeight;
+    if (top < ol.scrollTop) ol.scrollTop = Math.max(0, top - 8);
+    else if (bottom > ol.scrollTop + ol.clientHeight) ol.scrollTop = bottom - ol.clientHeight + 8;
+  }
+
   function setOpen(o) {
     open = o;
     place();
-    if (open) cards[list.index]?.scrollIntoView({ block: 'nearest' });
+    reveal();
   }
 
   function render() {
@@ -183,7 +202,7 @@ export function mountPlaylist(player, list, playItem) {
       if (i === list.index) c.setAttribute('aria-current', 'true');
       else c.removeAttribute('aria-current');
     });
-    if (open) cards[list.index]?.scrollIntoView({ block: 'nearest' });
+    reveal();
   }
 
   let busy = false;
