@@ -10,14 +10,13 @@
  *
  *   v=<owner>/<audio permlink or its Hive post permlink>  ->  /play?a=<audio permlink>
  *   v=<owner>/<public playlist id, audio only>            ->  /play?list=<playlist id>
- *   v=<owner>/<public playlist id, any video in it>       ->  `videoPlaylist` (videoPlaylist.js)
+ *   v=<owner>/<public playlist id, any video in it>       ->  `videoPlaylist` (videoPlaylist.js,
+ *                                                            which plays its audio too)
  *
  * Only consulted after the video lookups missed, so videos pay nothing for it.
  */
-const AUDIO_EMBED_BASE = (process.env.AUDIO_EMBED_BASE || 'https://audio.3speak.tv').replace(/\/$/, '');
-const AUDIO_COLLECTION = process.env.MONGODB_COLLECTION_AUDIO || 'embed-audio';
-const { findPublicPlaylist, hasVideo } = require('./videoPlaylist');
-// Enough to tell an untyped playlist with audio in it from a video one.
+const { findPublicPlaylist, hasVideo, AUDIO_API: AUDIO_EMBED_BASE, AUDIO_COLLECTION } = require('./videoPlaylist');
+// Enough to tell a playlist with audio in it from a video one.
 const PLAYLIST_PROBE_ITEMS = 50;
 
 // A few rows store post_permlink as "author/permlink" (see snapieaudio playlistController).
@@ -33,17 +32,19 @@ async function findAudio(db, owner, permlink) {
 
 /**
  * A public playlist: `{ videoPlaylist }` when any of its items is a video (this player
- * plays those, videoPlaylist.js), else `{ audioEmbed }` when one is an audio (the audio
- * player plays those), else null. A playlist typed 'audio' goes to the audio player.
+ * plays those and its audio, videoPlaylist.js), else `{ audioEmbed }` when one is an
+ * audio (the audio player plays those), else null.
  */
 async function findPlaylist(db, owner, id) {
   const list = await findPublicPlaylist(db, owner, id, { type: 1, items: { $slice: PLAYLIST_PROBE_ITEMS } });
   if (!list) return null;
   const audio = { audioEmbed: `${AUDIO_EMBED_BASE}/play?list=${encodeURIComponent(id)}` };
-  if (list.type === 'audio') return audio;
-  // Otherwise `type` cannot be trusted: the playlist indexer writes 'video' by default,
-  // so most playlists of audio say 'video'. The items decide; a video in it wins.
+  // `type` cannot be trusted either way: the playlist indexer writes 'video' by default,
+  // so most playlists of audio say 'video', and one typed 'audio' may hold videos too.
+  // The items decide: a video in it wins, since this player plays the audio as well,
+  // while the audio player would leave the videos out.
   if (await hasVideo(db, list, PLAYLIST_PROBE_ITEMS)) return { videoPlaylist: `${owner}/${id}` };
+  if (list.type === 'audio') return audio;
   const refs = (list.items || []).filter((i) => i && i.author && i.permlink);
   if (!refs.length) return null;
   const hit = await db.collection(AUDIO_COLLECTION).findOne(
