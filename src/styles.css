@@ -1765,8 +1765,10 @@ body.is-resolving .player-wrapper::after {
 }
 
 /* ─── Playlist mode (src/playlist.js) ─────────────────────────────────────────
-   Previous / next after the play button and a list button before fullscreen; the
-   list opens above the control bar on the right, like a settings menu. */
+   Previous / next after the play button and a list button before fullscreen. The
+   list docks on the right beside the player (.has-playlist-dock on the wrapper),
+   or lies over the right side of the video (.is-overlay) in fullscreen, a fixed
+   layout or a narrow frame. Cards: the thumbnail with its duration, a short title. */
 .video-js .vjs-control-bar .vjs-playlist-btn {
   flex-shrink: 0;
   display: flex;
@@ -1786,35 +1788,72 @@ body.is-resolving .player-wrapper::after {
   opacity: 0.35;
 }
 
-.video-js .vjs-playlist-panel {
-  position: absolute;
-  right: 8px;
-  bottom: calc(3em + 8px);
-  z-index: 8;
-  width: min(340px, calc(100% - 16px));
-  max-height: calc(100% - 3em - 24px);
+.player-wrapper.has-playlist-dock {
+  --pl-w: clamp(150px, 26%, 260px);
+  position: relative;
   display: flex;
-  flex-direction: column;
-  border-radius: 10px;
-  background: rgba(20, 20, 20, 0.94);
-  color: #fff;
-  font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
-  overflow: hidden;
+  align-items: stretch;
 }
 
-.video-js .vjs-playlist-panel[hidden] {
+.player-wrapper.has-playlist-dock > .video-js {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* In an embed the frame is the box: player and list fill its height. */
+body.iframe-mode .player-wrapper.has-playlist-dock {
+  height: 100vh;
+}
+
+/* layout-fill (an embed's default) pins the player to the frame with inset: 0,
+   so flex cannot narrow it: pull its right edge in and put the list there. */
+body.layout-fill .player-wrapper.has-playlist-dock > .video-js {
+  right: var(--pl-w) !important;
+  width: auto !important;
+}
+
+body.layout-fill .player-wrapper.has-playlist-dock > .vjs-playlist-dock {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.vjs-playlist-dock {
+  --pl-w: clamp(150px, 26%, 260px);
+  position: relative;
+  flex: 0 0 var(--pl-w);
+  width: var(--pl-w);
+  display: flex;
+  flex-direction: column;
+  background: #141414;
+  color: #fff;
+  font: 12px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.vjs-playlist-dock[hidden] {
   display: none;
 }
 
-.video-js .vjs-playlist-head {
+.vjs-playlist-dock.is-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 3em; /* above the control bar */
+  z-index: 8;
+  background: rgba(20, 20, 20, 0.94);
+}
+
+.vjs-playlist-head {
+  flex: none;
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 10px 12px 8px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px 8px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-.video-js .vjs-playlist-name {
+.vjs-playlist-name {
   flex: 1;
   min-width: 0;
   font-weight: 700;
@@ -1823,25 +1862,59 @@ body.is-resolving .player-wrapper::after {
   text-overflow: ellipsis;
 }
 
-.video-js .vjs-playlist-pos {
+.vjs-playlist-pos {
   flex: none;
   color: rgba(255, 255, 255, 0.6);
   font-variant-numeric: tabular-nums;
 }
 
-.video-js .vjs-playlist-items {
-  margin: 0;
-  padding: 4px 0;
-  list-style: none;
-  overflow-y: auto;
-}
-
-.video-js .vjs-playlist-item {
+.vjs-playlist-close {
+  flex: none;
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+
+.vjs-playlist-close svg {
+  width: 18px;
+  height: 18px;
+  fill: rgba(255, 255, 255, 0.8);
+}
+
+.vjs-playlist-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Inset 0 so the list never makes the row taller than the player: it scrolls. */
+.vjs-playlist-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.vjs-playlist-items {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+}
+
+.vjs-playlist-card {
+  display: block;
   width: 100%;
-  padding: 6px 12px;
+  padding: 0;
   border: 0;
   background: none;
   color: inherit;
@@ -1850,35 +1923,46 @@ body.is-resolving .player-wrapper::after {
   cursor: pointer;
 }
 
-.video-js .vjs-playlist-item:hover,
-.video-js .vjs-playlist-item:focus-visible {
-  background: rgba(255, 255, 255, 0.08);
+.vjs-playlist-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  background: #2a2a2a center / cover no-repeat;
 }
 
-.video-js .vjs-playlist-item.is-current {
-  color: #6db3ff;
-  font-weight: 600;
+.vjs-playlist-card:hover .vjs-playlist-thumb,
+.vjs-playlist-card:focus-visible .vjs-playlist-thumb {
+  outline-color: rgba(255, 255, 255, 0.5);
 }
 
-.video-js .vjs-playlist-thumb {
-  flex: none;
-  width: 64px;
-  height: 36px;
-  border-radius: 4px;
-  background: #333 center / cover no-repeat;
+.vjs-playlist-card.is-current .vjs-playlist-thumb {
+  outline-color: #6db3ff;
 }
 
-.video-js .vjs-playlist-title {
-  flex: 1;
-  min-width: 0;
+.vjs-playlist-dur {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.75);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vjs-playlist-title {
   display: -webkit-box;
+  margin-top: 4px;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.video-js .vjs-playlist-dur {
-  flex: none;
-  color: rgba(255, 255, 255, 0.6);
-  font-variant-numeric: tabular-nums;
+.vjs-playlist-card.is-current .vjs-playlist-title {
+  color: #6db3ff;
+  font-weight: 600;
 }
