@@ -1456,6 +1456,14 @@ async function fetchVideoData(videoParam, type, strict = false) {
   }
 }
 
+// The page starts as `is-resolving` (index.html): a spinner instead of the bare
+// <video controls>, whose own play bar would otherwise show while we ask the server
+// what `v` is. Ends when Video.js, the live viewer (live.js) or a message takes
+// over. An audio hand-off keeps it until the audio player has loaded.
+function doneResolving() {
+  document.body.classList.remove('is-resolving');
+}
+
 // `v` named an audio or an audio playlist, not a video (server audioEmbed.js): hand the
 // frame to the audio player, so a Hive frontend that only embeds play.3speak.tv video
 // links shows the audio player there. Embedded or ?mode=iframe → its embed look.
@@ -3223,6 +3231,7 @@ function updateViewCount(count) {
 // video is hidden. Used for BOTH live-stream states ("already ended") and video
 // load failures.
 function renderCenteredOverlay(message, stateLabel, subText) {
+  doneResolving();
   const wrapper = document.querySelector('.player-wrapper');
 
   // Hide the video + any leftover chrome so no play button, control bar, LIVE
@@ -3520,6 +3529,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   //    NOW initialize Video.js (it can detect layout classes correctly) and
   //    wire captions / TV mode.
+  doneResolving();
   initializePlayer();
 
   if (shouldShowCaptions) {
