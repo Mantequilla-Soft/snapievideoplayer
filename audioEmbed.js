@@ -10,13 +10,12 @@
  *
  *   v=<owner>/<audio permlink or its Hive post permlink>  ->  /play?a=<audio permlink>
  *   v=<owner>/<public playlist id, audio only>            ->  /play?list=<playlist id>
- *   v=<owner>/<public playlist id, any video in it>       ->  `videoPlaylist` (videoPlaylist.js)
+ *   v=<owner>/<public playlist id, any video in it>       ->  `videoPlaylist` (videoPlaylist.js,
+ *                                                            which plays its audio too)
  *
  * Only consulted after the video lookups missed, so videos pay nothing for it.
  */
-const AUDIO_EMBED_BASE = (process.env.AUDIO_EMBED_BASE || 'https://audio.3speak.tv').replace(/\/$/, '');
-const AUDIO_COLLECTION = process.env.MONGODB_COLLECTION_AUDIO || 'embed-audio';
-const { findPublicPlaylist, hasVideo } = require('./videoPlaylist');
+const { findPublicPlaylist, hasVideo, AUDIO_API: AUDIO_EMBED_BASE, AUDIO_COLLECTION } = require('./videoPlaylist');
 // Enough to tell an untyped playlist with audio in it from a video one.
 const PLAYLIST_PROBE_ITEMS = 50;
 

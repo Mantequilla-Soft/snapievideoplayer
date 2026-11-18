@@ -78,7 +78,7 @@ describe('/api/playlist', () => {
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('public, max-age=300');
     expect(res.body).toEqual({
-      id: 'bbbbbbbb-0001', owner: 'badadib', name: 'My videos',
+      id: 'bbbbbbbb-0001', owner: 'badadib', name: 'My videos', audioApi: 'https://audio.3speak.tv',
       items: [
         { v: 'badadib/new-one', title: 'From Hive', thumbnail: 'https://img.test/thumb.jpg', duration: 61 },
         { v: 'badadib/old-one', title: 'Legacy title', thumbnail: expect.any(String), duration: 120 },
@@ -90,12 +90,12 @@ describe('/api/playlist', () => {
     expect(JSON.parse(hive[0][1].body)).toHaveLength(2);
   });
 
-  it('leaves out what does not play: no video, encoding, deleted, an audio, a banned creator', async () => {
+  it('leaves out what does not play: no video, encoding, deleted, a banned creator', async () => {
     await seedEmbed({ permlink: 'ok1', hive_permlink: 'plays' });
     await seedEmbed({ permlink: 'enc1', hive_permlink: 'encoding', status: 'encoding' });
     await seedEmbed({ permlink: 'del1', hive_permlink: 'deleted', status: 'deleted' });
     await seedEmbed({ owner: 'ashenadib', permlink: 'ban1', hive_permlink: 'banned' });
-    await seedAudio();
+    await seedAudio({ status: 'deleted' });
     await db.collection('contentcreators').insertOne({ username: 'ashenadib', banned: true });
     await seedPlaylist('bbbbbbbb-0002', [
       ['badadib', 'nothing'], ['badadib', 'encoding'], ['badadib', 'deleted'],
@@ -150,6 +150,42 @@ describe('/api/playlist', () => {
     await db.collection('contentcreators').insertOne({ username: 'badadib', hidden: true });
     await seedPlaylist('bbbbbbbb-0007', [['badadib', 'v4']]);
     expect((await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0007')).status).toBe(404);
+  });
+
+  it('a mixed playlist lists its audio too, in order, as audio items', async () => {
+    await seedEmbed({ permlink: 'asset5', hive_permlink: 'a-video', duration: 30 });
+    await seedAudio({ permlink: 'aud5abcd', post_permlink: 'badadib/an-episode', title: 'Upload name', duration: 99.6, thumbnail_url: 'https://img.test/cover.jpg' });
+    await seedAudio({ permlink: 'aud6abcd', post_permlink: 'a-reply-track', title: 'Track two', duration: 0, mp3_duration: 61 });
+    titles = { 'badadib/an-episode': 'Episode one', 'badadib/a-reply-track': 'RE: The album' };
+    await seedPlaylist('bbbbbbbb-0011', [['badadib', 'an-episode'], ['badadib', 'a-video'], ['badadib', 'a-reply-track']],
+      { thumbnail: 'https://img.test/list.jpg' });
+    const res = await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0011');
+    expect(res.body.items).toEqual([
+      { v: 'badadib/an-episode', kind: 'audio', audio: 'aud5abcd', title: 'Episode one', thumbnail: 'https://img.test/cover.jpg', duration: 100 },
+      expect.objectContaining({ v: 'badadib/a-video' }),
+      // A reply has no title of its own: the upload's. No cover: the playlist's.
+      { v: 'badadib/a-reply-track', kind: 'audio', audio: 'aud6abcd', title: 'Track two', thumbnail: 'https://img.test/list.jpg', duration: 61 },
+    ]);
+    // Titles of videos and audio in the one Hive batch.
+    const hive = fetchMock.mock.calls.filter(([u]) => u === 'https://hive.test');
+    expect(hive).toHaveLength(1);
+    expect(JSON.parse(hive[0][1].body)).toHaveLength(3);
+  });
+
+  it('an audio named by its own permlink, listed twice, plays once; a banned creator\'s audio is left out', async () => {
+    await seedEmbed({ permlink: 'asset6', hive_permlink: 'b-video' });
+    await seedAudio({ permlink: 'aud7abcd', post_permlink: 'ep-seven', title: 'Seven' });
+    await seedAudio({ owner: 'ashenadib', permlink: 'aud8abcd', post_permlink: 'ep-eight' });
+    await db.collection('contentcreators').insertOne({ username: 'ashenadib', hidden: true });
+    await seedPlaylist('bbbbbbbb-0012', [['badadib', 'aud7abcd'], ['badadib', 'b-video'], ['badadib', 'ep-seven'], ['ashenadib', 'ep-eight']]);
+    const res = await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0012');
+    expect(res.body.items.map((i) => i.v)).toEqual(['badadib/aud7abcd', 'badadib/b-video']);
+  });
+
+  it('audio alone is no playlist for this player (the audio player plays it)', async () => {
+    await seedAudio();
+    await seedPlaylist('bbbbbbbb-0013', [['badadib', 'an-episode']]);
+    expect((await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0013')).status).toBe(404);
   });
 
   it('400 without owner/id', async () => {

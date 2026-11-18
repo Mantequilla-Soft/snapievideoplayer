@@ -110,6 +110,8 @@ export class FakePlayer {
     fn('aspectRatio', () => {});
     fn('addClass', function (c) { this.el_.classList.add(c); });
     fn('removeClass', function (c) { this.el_.classList.remove(c); });
+    fn('toggleClass', function (c, on) { this.el_.classList.toggle(c, on); });
+    fn('audioPosterMode', function (v) { if (v === undefined) return !!this.s.audioPoster; this.s.audioPoster = v; return undefined; });
     fn('tech', function () { return this.techObj; });
   }
 

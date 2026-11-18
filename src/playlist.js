@@ -1,5 +1,6 @@
 /**
- * Playlist mode: play.3speak.tv/watch?v=<owner>/<playlist id> for a playlist of videos.
+ * Playlist mode: play.3speak.tv/watch?v=<owner>/<playlist id> for a playlist of videos
+ * (and the audio in it: those items play through playlistAudio.js).
  *
  * Loaded only for a playlist (main.js imports it when /api/watch answers
  * `videoPlaylist`), so a single video never downloads it. The videos come from
@@ -30,6 +31,7 @@ const ICONS = {
   prev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>',
   next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 18 8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>',
   list: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>',
+  audio: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0-9 9v7a2 2 0 0 0 2 2h3v-8H5v-1a7 7 0 0 1 14 0v1h-3v8h3a2 2 0 0 0 2-2v-7a9 9 0 0 0-9-9z"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>',
 };
 
@@ -81,8 +83,8 @@ export function mountPlaylist(player, list, playItem) {
   const n = list.items.length;
   const bar = player.controlBar.el();
   const btn = (cls, label, icon) => button(`vjs-control vjs-button vjs-playlist-btn ${cls}`, label, icon);
-  const prev = btn('vjs-playlist-prev', 'Previous video', ICONS.prev);
-  const next = btn('vjs-playlist-next', 'Next video', ICONS.next);
+  const prev = btn('vjs-playlist-prev', 'Previous', ICONS.prev);
+  const next = btn('vjs-playlist-next', 'Next', ICONS.next);
   const toggle = btn('vjs-playlist-toggle', 'Playlist', ICONS.list);
 
   // The list: head (name, position, close) and one card per video.
@@ -101,6 +103,14 @@ export function mountPlaylist(player, list, playItem) {
     if (item.thumbnail) thumb.style.backgroundImage = `url("${String(item.thumbnail).replace(/"/g, '%22')}")`;
     const dur = formatDuration(item.duration);
     if (dur) thumb.appendChild(el('span', 'vjs-playlist-dur', dur));
+    // An audio (a mixed playlist): a headphones mark on its cover.
+    if (item.kind === 'audio') {
+      card.classList.add('is-audio');
+      const mark = el('span', 'vjs-playlist-kind');
+      mark.innerHTML = ICONS.audio;
+      mark.title = 'Audio';
+      thumb.appendChild(mark);
+    }
     card.append(thumb, el('span', 'vjs-playlist-title', item.title));
     card.addEventListener('click', () => {
       go(i);

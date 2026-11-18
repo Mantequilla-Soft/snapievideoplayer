@@ -287,4 +287,48 @@ describe('a playlist of videos behind a video id', () => {
     expect(player.hasStartedWatchSession).toBe(false);
     expect(player.el().querySelector('.vjs-playlist-pos').textContent).toBe('2 / 2');
   });
+  it('a mixed playlist starting with an audio plays it with its cover, counts a listen not a view, then the video', async () => {
+    const AUDIO_API = 'https://audio.3speak.tv';
+    const MIXED = {
+      ...LIST, audioApi: AUDIO_API,
+      items: [
+        { v: 'badadib/an-episode', kind: 'audio', audio: 'aud1abcd', title: 'Episode', thumbnail: 'https://img.test/cover.jpg', duration: 60 },
+        { v: 'badadib/two', title: 'Two', thumbnail: null, duration: 20 },
+      ],
+    };
+    const { fetch, player } = await boot({
+      url: '/watch?v=badadib/pl1&mode=iframe',
+      routes: {
+        '/api/watch': watchRoute,
+        '/api/playlist': { body: MIXED },
+        [`${AUDIO_API}/api/audio`]: { body: { format: 'm4a', audio_cid: 'Qmaudio', audioUrl: 'https://gw.test/ipfs/Qmaudio' } },
+        [`${AUDIO_API}/api/audio/play-start`]: { body: { sid: 's1', token: 't1', beatSeconds: 3 } },
+        'https://checker.3speak.tv/audio/listen/start': { body: { sid: 'l1', token: 'lt1', beatSeconds: 10 } },
+      },
+    });
+    // Only the playlist id went to /api/watch: the audio is no video.
+    expect(calls(fetch, '/api/watch').map(([u]) => u)).toEqual(['/api/watch?v=badadib/pl1']);
+    expect(calls(fetch, `${AUDIO_API}/api/audio`)[0][0]).toBe(`${AUDIO_API}/api/audio?a=aud1abcd`);
+    expect(player.src).toHaveBeenLastCalledWith({ src: 'https://gw.test/ipfs/Qmaudio', type: 'audio/mp4' });
+    expect(player.poster).toHaveBeenLastCalledWith('https://img.test/cover.jpg');
+    expect(player.audioPosterMode()).toBe(true);
+    expect(player.el().classList.contains('vjs-playlist-audio')).toBe(true);
+    expect(player.el().querySelector('.vjs-playlist-card.is-audio')).not.toBeNull();
+
+    await player.play();
+    player.trigger('play');
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(calls(fetch, '/api/view')).toHaveLength(0);
+    expect(calls(fetch, '/api/watch/start')).toHaveLength(0);
+    expect(JSON.parse(calls(fetch, `${AUDIO_API}/api/audio/play-start`)[0][1].body)).toEqual({ permlink: 'aud1abcd' });
+    expect(calls(fetch, 'https://checker.3speak.tv/audio/listen/start')).toHaveLength(1);
+
+    player.s.ended = true;
+    player.trigger('ended');
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(calls(fetch, '/api/watch').at(-1)[0]).toBe('/api/watch?v=badadib/two');
+    expect(player.audioPosterMode()).toBe(false);
+    expect(player.el().classList.contains('vjs-playlist-audio')).toBe(false);
+    expect(player.el().querySelector('.vjs-playlist-pos').textContent).toBe('2 / 2');
+  });
 });

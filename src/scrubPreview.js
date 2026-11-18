@@ -51,8 +51,14 @@ export function createScrubPreview(player) {
   }
 
   // Point the preview at a manifest and pin it to the lowest rendition.
+  // No url (an audio item of a playlist): no frame, the time only.
   function setSource(url) {
-    if (!url || url === currentUrl) return;
+    vid.style.display = url ? '' : 'none';
+    if (!url) {
+      if (currentUrl) { currentUrl = null; teardownHls(); try { vid.removeAttribute('src'); vid.load(); } catch { /* noop */ } }
+      return;
+    }
+    if (url === currentUrl) return;
     currentUrl = url;
     teardownHls();
     try { vid.removeAttribute('src'); vid.load(); } catch { /* noop */ }

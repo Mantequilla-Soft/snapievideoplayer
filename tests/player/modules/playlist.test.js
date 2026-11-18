@@ -89,6 +89,15 @@ describe('controls', () => {
     expect(cards[0].querySelector('.vjs-playlist-thumb').style.backgroundImage).toContain('https://img.test/1.jpg');
     expect(cards[0].getAttribute('aria-current')).toBe('true');
   });
+  it('an audio card carries a headphones mark', () => {
+    const pl = list();
+    pl.items[2] = { ...pl.items[2], kind: 'audio', audio: 'aud1' };
+    mountPlaylist(player, pl, vi.fn());
+    const cards = [...document.querySelectorAll('.vjs-playlist-card')];
+    expect(cards.map((c) => c.classList.contains('is-audio'))).toEqual([false, false, true]);
+    expect(cards[2].querySelector('.vjs-playlist-kind svg')).not.toBeNull();
+    expect(cards[0].querySelector('.vjs-playlist-kind')).toBeNull();
+  });
 });
 
 describe('the docked list', () => {

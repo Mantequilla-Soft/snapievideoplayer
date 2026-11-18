@@ -945,6 +945,8 @@ function initializePlayer() {
   });
 
   player.on('error', function(error) {
+    // An audio item of a playlist moves on to its next gateway itself (playlistAudio.js).
+    if (audioItem) return;
     console.error('Player error:', error);
     debugLog('Player error details', error);
     
@@ -1476,11 +1478,54 @@ function openAudioEmbed(audioUrl) {
   window.location.replace(url.toString());
 }
 
-// The next video of a playlist (playlist.js), in this same player: close the current
+// An audio item of a playlist playing now (playlistAudio.js), or null for a video.
+let audioItem = null;
+
+// An audio item of a playlist (videoPlaylist.js `kind: 'audio'`), in this same
+// player with its cover as the picture. `list` from audioSources(). None of the video
+// bookkeeping (view, watch session, sponsor break, heatmap, tip): playlistAudio.js
+// counts the listen the way the audio player does.
+async function loadPlaylistAudio(item, list, api) {
+  const audio = await import('./playlistAudio.js');
+  watchBeat(true);
+  player.watch = null;
+  currentVideoData = null;
+  audioItem = item;
+  adBreak.reset();
+  resetTicker();
+  applyTimeline(null);
+  setTipVideo(player, null);
+  if (heatmapBar) heatmapBar.setVideo(null);
+  if (scrubPreview) scrubPreview.setSource(null);
+  player.poster(item.thumbnail || '');
+  player.audioPosterMode(true);
+  player.toggleClass('vjs-playlist-audio', true);
+  player.toggleClass('no-cover', !item.thumbnail);
+  audio.loadAudio(player, { api, permlink: item.audio, list });
+  updateCurrentSource(item.title);
+  updatePlayerState('Ready');
+}
+
+// The next item of a playlist (playlist.js), in this same player: close the current
 // watch session, start the per-video bookkeeping (view, watch session, sponsor break,
-// captions) afresh and play. Throws when the video does not load.
-async function playPlaylistItem(item, { strict, captions }) {
+// captions) afresh and play. Throws when the item does not load.
+async function playPlaylistItem(item, { strict, captions, api }) {
+  if (item.kind === 'audio') {
+    const { audioSources } = await import('./playlistAudio.js');
+    await loadPlaylistAudio(item, await audioSources(api, item.audio), api);
+    if (captions) subtitleManager.checkAvailability(null, null); // the last video's, gone
+    const started = player.play();
+    if (started && started.catch) started.catch(() => {});
+    return;
+  }
   const data = await fetchVideoData(item.v, 'legacy', strict);
+  if (audioItem) {
+    audioItem = null;
+    (await import('./playlistAudio.js')).stopAudio(player);
+    player.audioPosterMode(false);
+    player.toggleClass('vjs-playlist-audio', false);
+    player.toggleClass('no-cover', false);
+  }
   watchBeat(true);
   player.watch = null;
   player.hasIncrementedView = false;
@@ -3519,19 +3564,27 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // A playlist of videos (videoPlaylist.js): start with the first video that loads;
   // playlist.js plays the rest in this same player.
+  // It may start with an audio (a mixed playlist): then firstAudio, its sources.
   let playlist = null;
+  let firstAudio = null;
   if (!videoData && videoError?.videoPlaylist) {
     const { loadPlaylist } = await import('./playlist.js');
     playlist = await loadPlaylist(videoError.videoPlaylist);
-    for (let i = 0; playlist && !videoData && i < playlist.items.length && i < 5; i++) {
+    for (let i = 0; playlist && !videoData && !firstAudio && i < playlist.items.length && i < 5; i++) {
+      const item = playlist.items[i];
       try {
-        videoData = await fetchVideoData(playlist.items[i].v, 'legacy', strict);
+        if (item.kind === 'audio') {
+          const { audioSources } = await import('./playlistAudio.js');
+          firstAudio = await audioSources(playlist.audioApi, item.audio);
+        } else {
+          videoData = await fetchVideoData(item.v, 'legacy', strict);
+        }
         playlist.index = i;
       } catch { /* try the next one */ }
     }
   }
 
-  if (!videoData) {
+  if (!videoData && !firstAudio) {
     const stream = await resolveStream(video);
     if (stream && stream.found) {
       debugLog('Live stream resolved from owner/room id', stream);
@@ -3634,15 +3687,16 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   try {
     // Load video into player
-    await loadVideoFromData(videoData);
+    if (firstAudio) await loadPlaylistAudio(playlist.items[playlist.index], firstAudio, playlist.audioApi);
+    else await loadVideoFromData(videoData);
 
     if (playlist) {
       const { mountPlaylist } = await import('./playlist.js');
-      mountPlaylist(player, playlist, (item) => playPlaylistItem(item, { strict, captions: shouldShowCaptions }));
+      mountPlaylist(player, playlist, (item) => playPlaylistItem(item, { strict, captions: shouldShowCaptions, api: playlist.audioApi }));
     }
 
     // Check for available captions
-    if (shouldShowCaptions && videoData.owner && videoData.permlink) {
+    if (shouldShowCaptions && videoData && videoData.owner && videoData.permlink) {
       subtitleManager.checkAvailability(videoData.owner, videoData.permlink);
     }
 

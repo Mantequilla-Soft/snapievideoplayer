@@ -91,6 +91,16 @@ describe('setSource', () => {
     expect(() => preview.setSource('https://cdn.example/b.m3u8')).not.toThrow();
   });
 
+  it('no source (an audio of a playlist) drops the frame, and the next video brings it back', () => {
+    preview.setSource('https://cdn.example/a.m3u8');
+    preview.setSource(null);
+    expect(FakeHls.instances[0].destroy).toHaveBeenCalled();
+    expect(vid().style.display).toBe('none');
+    preview.setSource('https://cdn.example/a.m3u8');
+    expect(FakeHls.instances).toHaveLength(2);
+    expect(vid().style.display).toBe('');
+  });
+
   it('uses native HLS where hls.js is not supported', () => {
     FakeHls.supported = false;
     preview.setSource('https://cdn.example/a.m3u8');

@@ -12,17 +12,25 @@
  * embed collection by permlink or hive_permlink), so `v` of an item is exactly what
  * /api/watch takes. Items that do not play (no video, still encoding, failed,
  * deleted, an expired story) and items by banned or hidden creators are left out.
+ *
+ * A playlist with a video in it may hold audio too (podcast episodes, songs): those
+ * play in this same player, as `kind: 'audio'` items naming the audio permlink.
+ * The page asks the audio player's API (`audioApi`) where the file is, as the audio
+ * player does, so the gateway rules stay in one place (src/playlistAudio.js).
  */
 const PLAYLIST_ID = /^[a-zA-Z0-9-]{8,64}$/;
 const MAX_ITEMS = 200;
 const CACHE_MS = 5 * 60 * 1000;
 const HIVE_TIMEOUT_MS = 4000;
+const AUDIO_COLLECTION = process.env.MONGODB_COLLECTION_AUDIO || 'embed-audio';
+// The audio player (snapieaudio): its /api/audio says where an audio's file is.
+const AUDIO_API = (process.env.AUDIO_EMBED_BASE || 'https://audio.3speak.tv').replace(/\/$/, '');
 
 const legacyCol = (db) => db.collection(process.env.MONGODB_COLLECTION_LEGACY);
 const embedCol = (db) => db.collection(process.env.MONGODB_COLLECTION_NEW);
 
 /** A public playlist of that owner, or null. */
-async function findPublicPlaylist(db, owner, id, projection = { name: 1, type: 1, items: 1 }) {
+async function findPublicPlaylist(db, owner, id, projection = { name: 1, type: 1, items: 1, thumbnail: 1 }) {
   if (!PLAYLIST_ID.test(String(id || ''))) return null;
   return db.collection('playlists').findOne({ _id: id, owner, access: 'public' }, { projection });
 }
@@ -56,6 +64,31 @@ async function videoRows(db, refs) {
   return rows;
 }
 
+/** The last part of an audio's post_permlink: a few rows store "author/permlink". */
+const postOfAudio = (row) => String(row.post_permlink || '').split('/').pop();
+
+/**
+ * Published audio for these refs, keyed 'author/permlink'. An item names the audio's
+ * Hive post (post_permlink), or now and then the audio itself (its permlink).
+ */
+async function audioRows(db, refs) {
+  if (!refs.length) return new Map();
+  const found = await db.collection(AUDIO_COLLECTION).find({
+    status: 'published',
+    $or: refs.flatMap((r) => [
+      { owner: r.author, post_permlink: { $in: [r.permlink, `${r.author}/${r.permlink}`] } },
+      { owner: r.author, permlink: r.permlink },
+    ]),
+  }).project({ permlink: 1, owner: 1, title: 1, originalFilename: 1, duration: 1, mp3_duration: 1, thumbnail_url: 1, post_permlink: 1 })
+    .toArray();
+  const rows = new Map();
+  for (const a of found) {
+    rows.set(`${a.owner}/${a.permlink}`, a);
+    if (postOfAudio(a)) rows.set(`${a.owner}/${postOfAudio(a)}`, a);
+  }
+  return rows;
+}
+
 /** Whether any of the first `probe` items is a video (decides video vs audio playlist). */
 async function hasVideo(db, list, probe = 50) {
   const refs = itemRefs(list, probe);
@@ -78,7 +111,10 @@ function snapTitle(body) {
   return line.length > 80 ? `${line.slice(0, 79).replace(/\s+\S*$/, '')}…` : line;
 }
 
-/** Hive titles for these refs in one JSON-RPC batch; {} when the node is slow or down. */
+/**
+ * Hive titles for these refs in one JSON-RPC batch, as 'author/permlink' ->
+ * { title, text } (text: a snap's first line, snapTitle). {} when the node is slow or down.
+ */
 async function hiveTitles(refs) {
   if (!refs.length) return {};
   const ac = new AbortController();
@@ -97,8 +133,8 @@ async function hiveTitles(refs) {
     const titles = {};
     for (const a of Array.isArray(answers) ? answers : []) {
       const post = a && a.result;
-      const title = post && post.author && (post.title || snapTitle(post.body));
-      if (title) titles[`${post.author}/${post.permlink}`] = String(title);
+      if (!post || !post.author) continue;
+      titles[`${post.author}/${post.permlink}`] = { title: String(post.title || ''), text: snapTitle(post.body) };
     }
     return titles;
   } catch {
@@ -117,10 +153,17 @@ function dbTitle({ video, isEmbed }) {
 
 const cache = new Map(); // 'owner/id' -> { until, value }
 
+/** The audio's own name: its title, else the uploaded file's name. */
+function audioName(row) {
+  return String(row.title || '').trim() || String(row.originalFilename || '').replace(/\.[a-z0-9]{2,4}$/i, '');
+}
+
 /**
- * { id, owner, name, items: [{ v, title, thumbnail, duration }] } for a public playlist
- * with videos in it, or null. `playable(video, isEmbed)` answers null for a video that
- * does not play, else { thumbnail }; it lives in server.js with the status rules.
+ * { id, owner, name, audioApi, items } for a public playlist with videos in it, or
+ * null. Items are { v, title, thumbnail, duration } for a video and the same plus
+ * `kind: 'audio'` and `audio` (its permlink) for an audio. `playable(video, isEmbed)`
+ * answers null for a video that does not play, else { thumbnail }; it lives in
+ * server.js with the status rules.
  */
 async function videoPlaylist(db, owner, id, playable) {
   const key = `${owner}/${id}`;
@@ -131,8 +174,9 @@ async function videoPlaylist(db, owner, id, playable) {
   if (!list) return null;
   const refs = itemRefs(list);
   const authors = [...new Set([owner, ...refs.map((r) => r.author)])];
-  const [rows, blockedRows] = await Promise.all([
+  const [rows, audio, blockedRows] = await Promise.all([
     videoRows(db, refs),
+    audioRows(db, refs),
     db.collection('contentcreators')
       .find({ username: { $in: authors }, $or: [{ banned: true }, { hidden: true }] })
       .project({ username: 1 }).toArray(),
@@ -141,30 +185,55 @@ async function videoPlaylist(db, owner, id, playable) {
   if (blocked.has(owner)) return null;
 
   const picked = [];
+  const seenAudio = new Set();
   for (const ref of refs) {
-    const row = rows.get(`${ref.author}/${ref.permlink}`);
-    if (!row || blocked.has(ref.author)) continue;
-    const ok = playable(row.video, row.isEmbed);
-    if (ok) picked.push({ ref, row, thumbnail: ok.thumbnail });
+    if (blocked.has(ref.author)) continue;
+    const key = `${ref.author}/${ref.permlink}`;
+    const row = rows.get(key);
+    if (row) {
+      const ok = playable(row.video, row.isEmbed);
+      if (ok) picked.push({ ref, row, thumbnail: ok.thumbnail });
+    } else if (audio.has(key) && !seenAudio.has(audio.get(key).permlink)) {
+      seenAudio.add(audio.get(key).permlink);
+      picked.push({ ref, audio: audio.get(key) });
+    }
   }
-  if (!picked.length) return null;
+  // A video decides that this player plays the list (audioEmbed.js); audio alone does not.
+  if (!picked.some((p) => p.row)) return null;
 
   // The title lives on the Hive POST. An item may name an embed asset by its own
-  // permlink (shorts do), so ask Hive for the post the asset is linked to.
-  const postOf = ({ ref, row }) => (row.isEmbed && row.video.hive_permlink
-    ? { author: row.video.owner, permlink: row.video.hive_permlink }
-    : ref);
+  // permlink (shorts do), so ask Hive for the post the asset is linked to; an audio
+  // likewise for its post_permlink.
+  const postOf = ({ ref, row, audio: a }) => {
+    if (a) return postOfAudio(a) ? { author: a.owner, permlink: postOfAudio(a) } : ref;
+    return row.isEmbed && row.video.hive_permlink ? { author: row.video.owner, permlink: row.video.hive_permlink } : ref;
+  };
   const titles = await hiveTitles(picked.map(postOf));
+  const cover = typeof list.thumbnail === 'string' && /^https:\/\//.test(list.thumbnail) ? list.thumbnail : null;
   const value = {
     id,
     owner,
     name: String(list.name || ''),
+    audioApi: AUDIO_API,
     items: picked.map((p) => {
-      const { ref, row, thumbnail } = p;
+      const { ref, row, thumbnail, audio: a } = p;
       const post = postOf(p);
+      const hive = titles[`${post.author}/${post.permlink}`] || {};
+      if (a) {
+        // A reply (an album track) has no title of its own ("RE: ..."): the upload's name.
+        const postTitle = /^re:/i.test(hive.title || '') ? '' : hive.title;
+        return {
+          v: `${ref.author}/${ref.permlink}`,
+          kind: 'audio',
+          audio: a.permlink,
+          title: postTitle || audioName(a) || hive.text || ref.permlink,
+          thumbnail: a.thumbnail_url || cover,
+          duration: Math.round(Number(a.mp3_duration || a.duration) || 0),
+        };
+      }
       return {
         v: `${ref.author}/${ref.permlink}`,
-        title: titles[`${post.author}/${post.permlink}`] || dbTitle(row) || ref.permlink,
+        title: hive.title || hive.text || dbTitle(row) || ref.permlink,
         thumbnail: thumbnail || null,
         duration: Number(row.video.duration) || 0,
       };
@@ -175,4 +244,4 @@ async function videoPlaylist(db, owner, id, playable) {
   return value;
 }
 
-module.exports = { findPublicPlaylist, itemRefs, hasVideo, videoPlaylist, PLAYLIST_ID };
+module.exports = { findPublicPlaylist, itemRefs, hasVideo, videoPlaylist, PLAYLIST_ID, AUDIO_API, AUDIO_COLLECTION };
