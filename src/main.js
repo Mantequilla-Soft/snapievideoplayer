@@ -1443,7 +1443,10 @@ async function fetchVideoData(videoParam, type, strict = false) {
     if (!response.ok) {
       // A proxy error page (nginx 502) is HTML: never show the JSON parser's message.
       const error = await response.json().catch(() => ({}));
-      throw Object.assign(new Error(error.error || 'Failed to fetch video'), { audioEmbed: error.audioEmbed });
+      throw Object.assign(new Error(error.error || 'Failed to fetch video'), {
+        audioEmbed: error.audioEmbed,
+        videoPlaylist: error.videoPlaylist,
+      });
     }
     
     const data = await response.json();
@@ -1471,6 +1474,23 @@ function openAudioEmbed(audioUrl) {
   const url = new URL(audioUrl);
   if (getUrlParams().mode === 'iframe' || window.self !== window.top) url.searchParams.set('iframe', '1');
   window.location.replace(url.toString());
+}
+
+// The next video of a playlist (playlist.js), in this same player: close the current
+// watch session, start the per-video bookkeeping (view, watch session, sponsor break,
+// captions) afresh and play. Throws when the video does not load.
+async function playPlaylistItem(item, { strict, captions }) {
+  const data = await fetchVideoData(item.v, 'legacy', strict);
+  watchBeat(true);
+  player.watch = null;
+  player.hasIncrementedView = false;
+  player.hasStartedWatchSession = false;
+  const replayBtn = document.querySelector('.vjs-replay-button');
+  if (replayBtn) replayBtn.style.display = 'none';
+  await loadVideoFromData(data);
+  if (captions && data.owner && data.permlink) subtitleManager.checkAvailability(data.owner, data.permlink);
+  const started = player.play();
+  if (started && started.catch) started.catch(() => {});
 }
 
 // When there's no video entry for `v`, ask our own backend to resolve it as a
@@ -3497,6 +3517,20 @@ document.addEventListener('DOMContentLoaded', async function() {
     return;
   }
 
+  // A playlist of videos (videoPlaylist.js): start with the first video that loads;
+  // playlist.js plays the rest in this same player.
+  let playlist = null;
+  if (!videoData && videoError?.videoPlaylist) {
+    const { loadPlaylist } = await import('./playlist.js');
+    playlist = await loadPlaylist(videoError.videoPlaylist);
+    for (let i = 0; playlist && !videoData && i < playlist.items.length && i < 5; i++) {
+      try {
+        videoData = await fetchVideoData(playlist.items[i].v, 'legacy', strict);
+        playlist.index = i;
+      } catch { /* try the next one */ }
+    }
+  }
+
   if (!videoData) {
     const stream = await resolveStream(video);
     if (stream && stream.found) {
@@ -3601,6 +3635,11 @@ document.addEventListener('DOMContentLoaded', async function() {
   try {
     // Load video into player
     await loadVideoFromData(videoData);
+
+    if (playlist) {
+      const { mountPlaylist } = await import('./playlist.js');
+      mountPlaylist(player, playlist, (item) => playPlaylistItem(item, { strict, captions: shouldShowCaptions }));
+    }
 
     // Check for available captions
     if (shouldShowCaptions && videoData.owner && videoData.permlink) {

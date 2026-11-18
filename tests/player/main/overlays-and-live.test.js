@@ -1,6 +1,6 @@
 import './_helpers/mocks.js';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { boot, cleanup, calls, hub } from './_helpers/boot.js';
+import { boot, cleanup, calls, hub, videoFixture } from './_helpers/boot.js';
 
 afterEach(() => cleanup());
 
@@ -250,5 +250,41 @@ describe('the resolving spinner (body.is-resolving from index.html)', () => {
       routes: { '/api/watch': { status: 404, body: { error: 'Video not found', audioEmbed: 'https://audio.3speak.tv/play?a=x' } } } });
     expect(resolving()).toBe(true);
     expect(card()).toBeNull();
+  });
+});
+
+describe('a playlist of videos behind a video id', () => {
+  const LIST = {
+    id: 'pl1', owner: 'badadib', name: 'My videos',
+    items: [
+      { v: 'badadib/one', title: 'One', thumbnail: null, duration: 10 },
+      { v: 'badadib/two', title: 'Two', thumbnail: null, duration: 20 },
+    ],
+  };
+  const watchRoute = (url) => (String(url).includes('badadib/pl1')
+    ? { status: 404, body: { error: 'Video not found', videoPlaylist: 'badadib/pl1' } }
+    : { body: videoFixture({ permlink: String(url).split('/').pop().split('&')[0] }) });
+
+  it('plays the first video with the playlist controls, then the next one when it ends', async () => {
+    const { fetch, player } = await boot({
+      url: '/watch?v=badadib/pl1&mode=iframe',
+      routes: { '/api/watch': watchRoute, '/api/playlist': { body: LIST } },
+    });
+    expect(calls(fetch, '/api/playlist')[0][0]).toBe('/api/playlist?v=badadib/pl1');
+    expect(calls(fetch, '/api/watch').map(([u]) => u)).toEqual(['/api/watch?v=badadib/pl1', '/api/watch?v=badadib/one']);
+    expect(hub.videojsCalls.length).toBeGreaterThan(0);
+    expect(player.el().querySelector('.vjs-playlist-next')).not.toBeNull();
+    expect(calls(fetch, '/api/stream')).toHaveLength(0);
+
+    player.hasIncrementedView = true;
+    player.hasStartedWatchSession = true;
+    const srcCalls = player.src.mock.calls.length;
+    player.trigger('ended');
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(calls(fetch, '/api/watch').at(-1)[0]).toBe('/api/watch?v=badadib/two');
+    expect(player.src.mock.calls.length).toBeGreaterThan(srcCalls);
+    expect(player.hasIncrementedView).toBe(false);
+    expect(player.hasStartedWatchSession).toBe(false);
+    expect(player.el().querySelector('.vjs-playlist-pos').textContent).toBe('2 / 2');
   });
 });

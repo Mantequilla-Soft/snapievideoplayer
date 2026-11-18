@@ -1763,3 +1763,122 @@ body.is-resolving .player-wrapper::after {
 @keyframes resolving-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── Playlist mode (src/playlist.js) ─────────────────────────────────────────
+   Previous / next after the play button and a list button before fullscreen; the
+   list opens above the control bar on the right, like a settings menu. */
+.video-js .vjs-control-bar .vjs-playlist-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.video-js .vjs-playlist-btn svg {
+  width: 1.6em;
+  height: 1.6em;
+  fill: #fff;
+}
+
+.video-js .vjs-playlist-btn:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.video-js .vjs-playlist-panel {
+  position: absolute;
+  right: 8px;
+  bottom: calc(3em + 8px);
+  z-index: 8;
+  width: min(340px, calc(100% - 16px));
+  max-height: calc(100% - 3em - 24px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: rgba(20, 20, 20, 0.94);
+  color: #fff;
+  font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+.video-js .vjs-playlist-panel[hidden] {
+  display: none;
+}
+
+.video-js .vjs-playlist-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.video-js .vjs-playlist-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.video-js .vjs-playlist-pos {
+  flex: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-variant-numeric: tabular-nums;
+}
+
+.video-js .vjs-playlist-items {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.video-js .vjs-playlist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.video-js .vjs-playlist-item:hover,
+.video-js .vjs-playlist-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.video-js .vjs-playlist-item.is-current {
+  color: #6db3ff;
+  font-weight: 600;
+}
+
+.video-js .vjs-playlist-thumb {
+  flex: none;
+  width: 64px;
+  height: 36px;
+  border-radius: 4px;
+  background: #333 center / cover no-repeat;
+}
+
+.video-js .vjs-playlist-title {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.video-js .vjs-playlist-dur {
+  flex: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-variant-numeric: tabular-nums;
+}
