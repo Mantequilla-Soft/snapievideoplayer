@@ -18,12 +18,14 @@
  *    so Video.js only sees a narrower player and its overlays stay where they were.
  *    In an embed the player then fills the frame's height instead of shrinking with
  *    its width. Closed with its x, opened again with the list button.
- *  - Where docking would leave too little video (fullscreen, a fixed app layout, a
- *    frame narrower than DOCK_MIN_WIDTH), the same list lies OVER the right side of
- *    the video instead, and starts closed.
+ *  - It starts open wherever it docks. Where docking would leave too little video
+ *    (fullscreen, a fixed app layout, a frame narrower than DOCK_MIN_WIDTH), the same
+ *    list lies OVER the right side of the video instead, and starts closed.
  */
 
-const DOCK_MIN_WIDTH = 480;
+// Docked from this frame width up (Ecency, Waves and Snapie embeds included); the
+// list then takes 20% of it, 112 to 195px, and the video shrinks to its left.
+const DOCK_MIN_WIDTH = 320;
 // App layouts with a fixed shape. layout-fill (an embed's default) docks fine.
 const FIXED_LAYOUTS = ['layout-mobile', 'layout-square', 'layout-desktop'];
 

@@ -1789,7 +1789,7 @@ body.is-resolving .player-wrapper::after {
 }
 
 .player-wrapper.has-playlist-dock {
-  --pl-w: clamp(150px, 26%, 260px);
+  --pl-w: clamp(112px, 20%, 195px);
   position: relative;
   display: flex;
   align-items: stretch;
@@ -1820,7 +1820,7 @@ body.layout-fill .player-wrapper.has-playlist-dock > .vjs-playlist-dock {
 }
 
 .vjs-playlist-dock {
-  --pl-w: clamp(150px, 26%, 260px);
+  --pl-w: clamp(112px, 20%, 195px);
   position: relative;
   flex: 0 0 var(--pl-w);
   width: var(--pl-w);
@@ -1829,6 +1829,21 @@ body.layout-fill .player-wrapper.has-playlist-dock > .vjs-playlist-dock {
   background: #141414;
   color: #fff;
   font: 12px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* A narrow list (a small embed) has no room for the name: position and close only. */
+.vjs-playlist-dock {
+  container-type: inline-size;
+}
+
+@container (max-width: 140px) {
+  .vjs-playlist-name {
+    display: none;
+  }
+
+  .vjs-playlist-pos {
+    flex: 1;
+  }
 }
 
 .vjs-playlist-dock[hidden] {

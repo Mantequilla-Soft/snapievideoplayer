@@ -133,6 +133,16 @@ describe('the docked list', () => {
     expect(player.fluid).toHaveBeenLastCalledWith(true);
   });
 
+  it('docks in a narrow embed too (Ecency, Waves), open from the start', () => {
+    document.body.innerHTML = '';
+    setup({ width: 320 });
+    document.body.classList.add('iframe-mode', 'layout-fill');
+    mountPlaylist(player, list(), vi.fn());
+    expect(dock().hidden).toBe(false);
+    expect(dock().parentElement).toBe(wrapper);
+    expect(wrapper.classList.contains('has-playlist-dock')).toBe(true);
+  });
+
   it('on the plain page the player stays fluid', () => {
     mountPlaylist(player, list(), vi.fn());
     expect(player.fill).not.toHaveBeenCalled();
@@ -153,7 +163,7 @@ describe('the docked list', () => {
 describe('the list over the video', () => {
   it('a narrow frame starts with it closed; opened, it lies over the video', () => {
     document.body.innerHTML = '';
-    setup({ width: 400 });
+    setup({ width: 300 });
     mountPlaylist(player, list(), vi.fn());
     expect(dock().hidden).toBe(true);
     $('.vjs-playlist-toggle').click();
@@ -190,7 +200,7 @@ describe('the list over the video', () => {
 
   it('a pick over the video closes the list so the video shows', async () => {
     document.body.innerHTML = '';
-    setup({ width: 400 });
+    setup({ width: 300 });
     mountPlaylist(player, list(), vi.fn(async () => {}));
     $('.vjs-playlist-toggle').click();
     document.querySelectorAll('.vjs-playlist-card')[1].click();
