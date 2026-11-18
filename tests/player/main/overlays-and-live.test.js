@@ -192,3 +192,37 @@ describe('?live= branch', () => {
     expect(card().querySelector('span').textContent).toBe('Could not start the live session');
   });
 });
+
+describe('an audio or audio playlist behind a video id', () => {
+  const LIST = 'https://audio.3speak.tv/play?list=0123456789abcdef0123456789abcdef';
+  const VIA = '/watch?v=badadib/0123456789abcdef0123456789abcdef';
+  const audioRoute = { '/api/watch': { status: 404, body: { error: 'Video not found', audioEmbed: LIST } } };
+
+  // jsdom cannot navigate (it prints "Not implemented: navigation"), so record the
+  // audio player URL the page builds for location.replace().
+  function watchNavigation() {
+    const built = [];
+    const Real = URL;
+    vi.stubGlobal('URL', class extends Real {
+      constructor(...a) { super(...a); if (this.host === 'audio.3speak.tv') built.push(this); }
+    });
+    quiet();
+    return { target: () => built.at(-1)?.toString() };
+  }
+
+  it('hands the frame to the audio player in its embed look, no video player, no stream probe', async () => {
+    const nav = watchNavigation();
+    const { fetch } = await boot({ url: `${VIA}&mode=iframe`, routes: audioRoute });
+    expect(nav.target()).toBe(`${LIST}&iframe=1`);
+    expect(hub.videojsCalls).toHaveLength(0);
+    expect(calls(fetch, '/api/stream')).toHaveLength(0);
+    expect(card()).toBeNull();
+  });
+
+  it('opened directly (not framed, no mode=iframe) it keeps the audio player page look', async () => {
+    const nav = watchNavigation();
+    vi.stubGlobal('parent', window);
+    await boot({ url: VIA, iframe: false, routes: audioRoute });
+    expect(nav.target()).toBe(LIST);
+  });
+});

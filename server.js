@@ -7,6 +7,7 @@ require('dotenv').config();
 
 const db = require('./db');
 const watchTracking = require('./watchTracking');
+const { audioEmbedFields } = require('./audioEmbed');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -944,7 +945,8 @@ app.get('/api/watch', async (req, res) => {
     const isEmbed = !!embedVideo;
 
     if (!video) {
-      return res.status(404).json({ error: 'Video not found' });
+      // An audio or audio playlist shared as a video link: say where it plays (audioEmbed.js).
+      return res.status(404).json({ error: 'Video not found', ...await audioEmbedFields(db.getDb(), owner, permlink) });
     }
 
     // Determine video URLs based on status and collection type
@@ -1081,7 +1083,7 @@ app.get('/api/embed', async (req, res) => {
     const video = await db.findEmbedVideo(owner, permlink);
     
     if (!video) {
-      return res.status(404).json({ error: 'Video not found' });
+      return res.status(404).json({ error: 'Video not found', ...await audioEmbedFields(db.getDb(), owner, permlink) });
     }
     
     // Determine video URLs based on status

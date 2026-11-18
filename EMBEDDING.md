@@ -55,6 +55,16 @@ https://play.3speak.tv/watch?v=owner/permlink
 https://play.3speak.tv/embed?v=owner/permlink
 ```
 
+### Audio and Audio Playlists (same URL)
+```
+https://play.3speak.tv/watch?v=owner/<audio post permlink or audio permlink>&mode=iframe
+https://play.3speak.tv/watch?v=owner/<public playlist id>&mode=iframe
+```
+When `v` is not a video, the player looks for an audio, then a public audio playlist,
+of that owner and opens the 3Speak audio player (audio.3speak.tv) in its place, so a
+frontend that already embeds 3Speak video links shows audio with no change. Video
+playlists are not covered.
+
 ## Parameters
 
 - `v` - **Required**: Video identifier in format `owner/permlink`

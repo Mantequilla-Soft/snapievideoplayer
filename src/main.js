@@ -1443,7 +1443,7 @@ async function fetchVideoData(videoParam, type, strict = false) {
     if (!response.ok) {
       // A proxy error page (nginx 502) is HTML: never show the JSON parser's message.
       const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || 'Failed to fetch video');
+      throw Object.assign(new Error(error.error || 'Failed to fetch video'), { audioEmbed: error.audioEmbed });
     }
     
     const data = await response.json();
@@ -1454,6 +1454,15 @@ async function fetchVideoData(videoParam, type, strict = false) {
     console.error('Error fetching video:', error);
     throw error;
   }
+}
+
+// `v` named an audio or an audio playlist, not a video (server audioEmbed.js): hand the
+// frame to the audio player, so a Hive frontend that only embeds play.3speak.tv video
+// links shows the audio player there. Embedded or ?mode=iframe → its embed look.
+function openAudioEmbed(audioUrl) {
+  const url = new URL(audioUrl);
+  if (getUrlParams().mode === 'iframe' || window.self !== window.top) url.searchParams.set('iframe', '1');
+  window.location.replace(url.toString());
 }
 
 // When there's no video entry for `v`, ask our own backend to resolve it as a
@@ -3472,6 +3481,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     setReportContext({ strict: !!videoData && videoData.strict === true });
   } catch (error) {
     videoError = error;
+  }
+
+  if (!videoData && videoError?.audioEmbed) {
+    openAudioEmbed(videoError.audioEmbed);
+    return;
   }
 
   if (!videoData) {
