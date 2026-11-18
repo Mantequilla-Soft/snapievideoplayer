@@ -25,8 +25,9 @@ beforeEach(async () => {
     if (!Array.isArray(body)) return json({ result: { author: '', permlink: '' } });
     return json(body.map((q) => {
       const [author, permlink] = q.params;
-      const title = titles[`${author}/${permlink}`];
-      return { id: q.id, result: title ? { author, permlink, title } : { author: '', permlink: '' } };
+      const t = titles[`${author}/${permlink}`];
+      if (t && typeof t === 'object') return { id: q.id, result: { author, permlink, title: '', ...t } };
+      return { id: q.id, result: t ? { author, permlink, title: t } : { author: '', permlink: '' } };
     }));
   });
 });
@@ -112,7 +113,15 @@ describe('/api/playlist', () => {
     expect(res.body.items).toEqual([expect.objectContaining({ v: 'badadib/shrt1abc', title: 'My short' })]);
   });
 
-  it('a post without a title (a snap) falls back to the uploaded file name', async () => {
+  it('a snap (no title) is named by the first line of its text', async () => {
+    await seedEmbed({ permlink: 'snap2abc', hive_permlink: 'nlmac2-post' });
+    titles = { 'badadib/nlmac2-post': { body: '![x](https://img.test/a.png)\n\n## **NLMAC2** - [What is on](https://x.test) 3/15\n\nMore text https://play.3speak.tv/watch?v=a/b' } };
+    await seedPlaylist('bbbbbbbb-0010', [['badadib', 'snap2abc']]);
+    const res = await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0010');
+    expect(res.body.items[0].title).toBe('NLMAC2 - What is on 3/15');
+  });
+
+  it('a post without a title or text falls back to the uploaded file name', async () => {
     await seedEmbed({ permlink: 'snap1abc', hive_permlink: '20261105t225357093z', originalFilename: 'VjingGodOfColors.mp4', embed_title: 'Comment' });
     await seedPlaylist('bbbbbbbb-0009', [['badadib', 'snap1abc']]);
     const res = await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0009');

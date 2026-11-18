@@ -62,6 +62,22 @@ async function hasVideo(db, list, probe = 50) {
   return (await videoRows(db, refs)).size > 0;
 }
 
+/**
+ * A snap (a comment) has no title: use the first line of its text, without
+ * images, links, embeds and markup, cut to 80 characters.
+ */
+function snapTitle(body) {
+  const line = String(body || '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .split('\n')
+    .map((l) => l.replace(/^\s*(?:#{1,6}|>|[-*])\s*/, '').replace(/[*_`~]/g, '').replace(/\s+/g, ' ').trim())
+    .find(Boolean) || '';
+  return line.length > 80 ? `${line.slice(0, 79).replace(/\s+\S*$/, '')}…` : line;
+}
+
 /** Hive titles for these refs in one JSON-RPC batch; {} when the node is slow or down. */
 async function hiveTitles(refs) {
   if (!refs.length) return {};
@@ -81,7 +97,8 @@ async function hiveTitles(refs) {
     const titles = {};
     for (const a of Array.isArray(answers) ? answers : []) {
       const post = a && a.result;
-      if (post && post.author && post.title) titles[`${post.author}/${post.permlink}`] = String(post.title);
+      const title = post && post.author && (post.title || snapTitle(post.body));
+      if (title) titles[`${post.author}/${post.permlink}`] = String(title);
     }
     return titles;
   } catch {
