@@ -60,11 +60,14 @@ describe('/api/watch for a playlist with videos', () => {
       .toBe('https://audio.3speak.tv/play?list=aaaaaaaa-0003');
   });
 
-  it('a playlist typed "audio" stays with the audio player', async () => {
+  it('the items decide, not the type: one typed "audio" with a video in it plays here, audio alone there', async () => {
     await seedEmbed({ permlink: 'asset1', hive_permlink: 'first-video' });
-    await seedPlaylist('aaaaaaaa-0004', [['badadib', 'first-video']], { type: 'audio' });
-    const res = await request(app).get('/api/watch?v=badadib/aaaaaaaa-0004');
-    expect(res.body.audioEmbed).toBe('https://audio.3speak.tv/play?list=aaaaaaaa-0004');
+    await seedAudio();
+    await seedPlaylist('aaaaaaaa-0004', [['badadib', 'an-episode'], ['badadib', 'first-video']], { type: 'audio' });
+    await seedPlaylist('aaaaaaaa-0005', [['badadib', 'an-episode']], { type: 'audio' });
+    expect((await request(app).get('/api/watch?v=badadib/aaaaaaaa-0004')).body.videoPlaylist).toBe('badadib/aaaaaaaa-0004');
+    expect((await request(app).get('/api/watch?v=badadib/aaaaaaaa-0005')).body.audioEmbed)
+      .toBe('https://audio.3speak.tv/play?list=aaaaaaaa-0005');
   });
 });
 
