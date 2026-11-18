@@ -104,13 +104,28 @@ describe('/api/playlist', () => {
     expect(res.body.items.map((i) => i.v)).toEqual(['badadib/plays']);
   });
 
+  it('an item named by its asset permlink (a short) gets the title of its linked Hive post', async () => {
+    await seedEmbed({ permlink: 'shrt1abc', hive_permlink: 'my-short-post', short: true });
+    titles = { 'badadib/my-short-post': 'My short' };
+    await seedPlaylist('bbbbbbbb-0008', [['badadib', 'shrt1abc']]);
+    const res = await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0008');
+    expect(res.body.items).toEqual([expect.objectContaining({ v: 'badadib/shrt1abc', title: 'My short' })]);
+  });
+
+  it('a post without a title (a snap) falls back to the uploaded file name', async () => {
+    await seedEmbed({ permlink: 'snap1abc', hive_permlink: '20261105t225357093z', originalFilename: 'VjingGodOfColors.mp4', embed_title: 'Comment' });
+    await seedPlaylist('bbbbbbbb-0009', [['badadib', 'snap1abc']]);
+    const res = await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0009');
+    expect(res.body.items[0].title).toBe('VjingGodOfColors');
+  });
+
   it('falls back to the permlink when Hive is down, and keeps working', async () => {
     titles = () => { throw new Error('offline'); };
     await seedEmbed({ permlink: 'asset3', hive_permlink: 'no-title' });
     await seedPlaylist('bbbbbbbb-0003', [['badadib', 'no-title']]);
     const res = await request(app).get('/api/playlist?v=badadib/bbbbbbbb-0003');
     expect(res.status).toBe(200);
-    expect(res.body.items[0].title).toBe('no-title');
+    expect(res.body.items[0].title).toBe('clip');
   });
 
   it('404 for a private playlist, another owner, a banned owner, or one with no playable video', async () => {

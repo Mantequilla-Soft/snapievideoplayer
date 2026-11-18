@@ -91,6 +91,13 @@ async function hiveTitles(refs) {
   }
 }
 
+/** A title from the row itself, for a post without one (a snap) or a slow Hive node. */
+function dbTitle({ video, isEmbed }) {
+  if (!isEmbed) return video.title || '';
+  if (video.embed_title && video.embed_title !== 'Comment') return video.embed_title;
+  return String(video.originalFilename || '').replace(/\.[a-z0-9]{2,4}$/i, '');
+}
+
 const cache = new Map(); // 'owner/id' -> { until, value }
 
 /**
@@ -125,17 +132,22 @@ async function videoPlaylist(db, owner, id, playable) {
   }
   if (!picked.length) return null;
 
-  const titles = await hiveTitles(picked.map((p) => p.ref));
+  // The title lives on the Hive POST. An item may name an embed asset by its own
+  // permlink (shorts do), so ask Hive for the post the asset is linked to.
+  const postOf = ({ ref, row }) => (row.isEmbed && row.video.hive_permlink
+    ? { author: row.video.owner, permlink: row.video.hive_permlink }
+    : ref);
+  const titles = await hiveTitles(picked.map(postOf));
   const value = {
     id,
     owner,
     name: String(list.name || ''),
-    items: picked.map(({ ref, row, thumbnail }) => {
-      const key2 = `${ref.author}/${ref.permlink}`;
-      const dbTitle = row.isEmbed ? '' : row.video.title;
+    items: picked.map((p) => {
+      const { ref, row, thumbnail } = p;
+      const post = postOf(p);
       return {
-        v: key2,
-        title: titles[key2] || dbTitle || ref.permlink,
+        v: `${ref.author}/${ref.permlink}`,
+        title: titles[`${post.author}/${post.permlink}`] || dbTitle(row) || ref.permlink,
         thumbnail: thumbnail || null,
         duration: Number(row.video.duration) || 0,
       };
