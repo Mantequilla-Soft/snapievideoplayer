@@ -20,6 +20,8 @@ const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve()
 
 beforeEach(async () => {
   document.body.innerHTML = '';
+  // jsdom has no scrollIntoView; the panel scrolls the current video into view.
+  Element.prototype.scrollIntoView = vi.fn();
   vi.resetModules();
   ({ loadPlaylist, mountPlaylist } = await import('../../../src/playlist.js'));
   player = createFakePlayer({ withFullscreenButton: true });
@@ -77,6 +79,7 @@ describe('mountPlaylist', () => {
     toggle.click();
     expect($('.vjs-playlist-panel').hidden).toBe(false);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
     toggle.click();
     expect($('.vjs-playlist-panel').hidden).toBe(true);
   });
