@@ -8,6 +8,7 @@ require('dotenv').config();
 const db = require('./db');
 const watchTracking = require('./watchTracking');
 const { audioEmbedFields } = require('./audioEmbed');
+const { videoPlaylist } = require('./videoPlaylist');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -1172,6 +1173,44 @@ app.get('/api/embed', async (req, res) => {
     
   } catch (error) {
     console.error('Error fetching embed video:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Whether a playlist item plays, by the same status rules as /api/watch: null for no
+ * video yet, a failed or deleted one (placeholders included) or an expired story;
+ * else { thumbnail } for the list.
+ */
+function playlistItemPlayable(video, isEmbed) {
+  const r = isEmbed ? getVideoUrlsForEmbedStatus(video) : getVideoUrlsForLegacyStatus(video);
+  if (!r || r.error || r.isPlaceholder) return null;
+  if (isEmbed && isExpiredStory(video)) return null;
+  const thumbnail = isEmbed ? video.thumbnail_url : (video.thumbnail && transformIPFSUrl(video.thumbnail));
+  return { thumbnail: thumbnail || null };
+}
+
+/**
+ * GET /api/playlist?v=owner/<playlist id>
+ * The videos of a public playlist, in order, for the player's playlist mode
+ * (src/playlist.js): { id, owner, name, items: [{ v, title, thumbnail, duration }] }.
+ * Each item's `v` is what /api/watch takes. 404 when there is no such public playlist
+ * or none of its videos plays. See videoPlaylist.js.
+ */
+app.get('/api/playlist', async (req, res) => {
+  const params = parseVideoParams(req.query.v);
+  if (params.error) {
+    return res.status(400).json({ error: params.error });
+  }
+  try {
+    const list = await videoPlaylist(db.getDb(), params.owner, params.permlink, playlistItemPlayable);
+    if (!list) {
+      return res.status(404).json({ error: 'Playlist not found' });
+    }
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(list);
+  } catch (error) {
+    console.error('Error fetching playlist:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

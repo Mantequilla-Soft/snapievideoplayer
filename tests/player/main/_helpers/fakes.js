@@ -57,6 +57,7 @@ export class FakePlayer {
     else document.body.appendChild(el);
     this.el_ = el;
     this.techEl = tech;
+    this.controlBar = { el: () => bar };
     this.techObj = { el: () => tech };
 
     const fn = (name, impl) => { this[name] = vi.fn(impl); };
