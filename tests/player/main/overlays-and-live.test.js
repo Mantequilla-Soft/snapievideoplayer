@@ -226,3 +226,29 @@ describe('an audio or audio playlist behind a video id', () => {
     expect(nav.target()).toBe(LIST);
   });
 });
+
+describe('the resolving spinner (body.is-resolving from index.html)', () => {
+  const resolving = () => document.body.classList.contains('is-resolving');
+  const startResolving = { setup: () => document.body.classList.add('is-resolving') };
+
+  it('ends when Video.js takes over a video', async () => {
+    await boot({ ...startResolving });
+    expect(hub.videojsCalls.length).toBeGreaterThan(0);
+    expect(resolving()).toBe(false);
+  });
+
+  it('ends when a message replaces the player', async () => {
+    quiet();
+    await boot({ ...startResolving, routes: { '/api/embed': { status: 404, body: { error: 'Video not found' } } } });
+    expect(card()).not.toBeNull();
+    expect(resolving()).toBe(false);
+  });
+
+  it('stays through an audio hand-off, until the audio player has loaded', async () => {
+    quiet();
+    await boot({ ...startResolving, url: '/watch?v=badadib/0123456789abcdef0123456789abcdef&mode=iframe',
+      routes: { '/api/watch': { status: 404, body: { error: 'Video not found', audioEmbed: 'https://audio.3speak.tv/play?a=x' } } } });
+    expect(resolving()).toBe(true);
+    expect(card()).toBeNull();
+  });
+});

@@ -132,6 +132,7 @@ export async function initLiveSession({ roomName, apiBase, lkUrl, host = null, w
   const wrapper = document.querySelector('.player-wrapper');
   const video = document.getElementById('snapie-player');
   if (!wrapper || !video) throw new Error('Player container missing');
+  document.body.classList.remove('is-resolving'); // the live viewer takes the frame (main.js doneResolving)
 
   // Establish a reliable 16:9 frame ourselves. The composited OpenPods program
   // is 16:9, and we never init Video.js on this path — so we override whatever

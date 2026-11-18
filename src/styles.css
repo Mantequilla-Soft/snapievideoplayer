@@ -1734,3 +1734,32 @@ body.tv-fullscreen-mode .vjs-tech {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* While the page works out what `v` is (main.js doneResolving): a spinner, not the
+   bare <video controls> and the browser's own play bar. */
+body.is-resolving .player-wrapper {
+  position: relative;
+}
+
+body.is-resolving #snapie-player {
+  visibility: hidden;
+}
+
+body.is-resolving .player-wrapper::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  box-sizing: border-box;
+  animation: resolving-spin 0.8s linear infinite;
+}
+
+@keyframes resolving-spin {
+  to { transform: rotate(360deg); }
+}
