@@ -159,19 +159,47 @@ const SELF_BASE = (process.env.PUBLIC_BASE_URL || 'https://preview-player.okinok
 // integrators change nothing. Env `STREAM_ENDPOINTS` is a comma-separated list
 // of "apiBase|livekitWsUrl" pairs; defaults cover production (live.3speak.tv,
 // where 3speak.tv and preview.3speak.tv stream since 2026-10-18), preview's old
-// okinoko server and the older public hangouts API. Without live.3speak.tv a
-// running stream there answered { endedStream: true }: "This stream has
-// already ended" in every embed while the stream was live.
-const STREAM_ENDPOINTS = (process.env.STREAM_ENDPOINTS
-  || 'https://live.3speak.tv|wss://live.3speak.tv,https://hangouts.okinoko.io|wss://livekit.okinoko.io,https://hangout-api.3speak.tv|wss://livekit.3speak.tv')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .map((pair) => {
-    const [api, lk] = pair.split('|').map((x) => (x || '').trim());
-    return { api: (api || '').replace(/\/$/, ''), lk: lk || '' };
-  })
-  .filter((e) => e.api && e.lk);
+// okinoko server and the older public hangouts API.
+//
+// live.3speak.tv is ALWAYS probed, last when the env list leaves it out:
+// without it a running stream there answered { endedStream: true }, "This
+// stream has already ended" in every embed while the stream was live. Changing
+// the code default did not help a server whose env still named an older list
+// (play.3speak.tv, 2026-11-17 and again 2026-11-19).
+const PRODUCTION_STREAM_ENDPOINT = 'https://live.3speak.tv|wss://live.3speak.tv';
+const STREAM_ENDPOINTS = parseStreamEndpoints(process.env.STREAM_ENDPOINTS
+  || `${PRODUCTION_STREAM_ENDPOINT},https://hangouts.okinoko.io|wss://livekit.okinoko.io,https://hangout-api.3speak.tv|wss://livekit.3speak.tv`);
+
+function parseStreamEndpoints(list) {
+  const out = `${list},${PRODUCTION_STREAM_ENDPOINT}`
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const [api, lk] = pair.split('|').map((x) => (x || '').trim());
+      return { api: (api || '').replace(/\/$/, ''), lk: lk || '' };
+    })
+    .filter((e) => e.api && e.lk);
+  return out.filter((e, i) => out.findIndex((x) => x.api === e.api) === i);
+}
+
+// How long after a stream post a new live room of the same host still counts
+// as that stream continuing.
+const STREAM_CONTINUE_MS = 6 * 60 * 60 * 1000;
+
+/** The host's live room started after the post (and not long after), newest first. */
+function newerStreamOfHost(liveByEndpoint, host, postCreated) {
+  let best = null;
+  for (const { ep, liveStreams } of liveByEndpoint) {
+    for (const st of liveStreams) {
+      if (!st || st.host !== host || !st.live || (st.mode && st.mode !== 'standalone')) continue;
+      const at = Date.parse(st.createdAt || '');
+      if (!Number.isFinite(at) || at < postCreated - 60_000 || at > postCreated + STREAM_CONTINUE_MS) continue;
+      if (!best || at > best.at) best = { ep, stream: st, at };
+    }
+  }
+  return best;
+}
 
 // fetch with an abort timeout (Node 18+/22 global fetch).
 async function fetchJsonWithTimeout(url, timeoutMs = 4000) {
@@ -192,8 +220,9 @@ async function fetchJsonWithTimeout(url, timeoutMs = 4000) {
 // whose room is gone) apart from a genuinely missing video.
 const HIVE_API = process.env.HIVE_API || 'https://api.hive.blog';
 
-// True when author/permlink is an OpenPods stream POST (json_metadata.video.live).
-async function isEndedStreamPost(author, permlink) {
+// When author/permlink is an OpenPods stream POST (json_metadata.video.live):
+// { created } (ms), else null.
+async function streamPostInfo(author, permlink) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 4000);
   try {
@@ -203,15 +232,17 @@ async function isEndedStreamPost(author, permlink) {
       body: JSON.stringify({ jsonrpc: '2.0', method: 'condenser_api.get_content', params: [author, permlink], id: 1 }),
       signal: ac.signal,
     });
-    if (!r.ok) return false;
+    if (!r.ok) return null;
     const j = await r.json();
     const post = j?.result;
-    if (!post || !post.author) return false;
+    if (!post || !post.author) return null;
     let meta = {};
     try { meta = JSON.parse(post.json_metadata || '{}'); } catch { /* not JSON */ }
-    return !!meta?.video?.live;
+    if (!meta?.video?.live) return null;
+    const created = Date.parse(`${post.created || ''}Z`);
+    return { created: Number.isFinite(created) ? created : null };
   } catch {
-    return false;
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -1355,11 +1386,13 @@ app.get('/api/stream', async (req, res) => {
   if (!raw) return res.status(400).json({ found: false, error: 'missing v' });
 
   const candidates = [...new Set([raw, raw.split('/').pop()].filter(Boolean))];
+  const liveByEndpoint = [];
 
   for (const ep of STREAM_ENDPOINTS) {
     // Pull the endpoint's live standalone streams once (cheap, no-store).
     const streamsRes = await fetchJsonWithTimeout(`${ep.api}/streams`);
     const liveStreams = Array.isArray(streamsRes.data) ? streamsRes.data : [];
+    liveByEndpoint.push({ ep, liveStreams });
 
     for (const roomName of candidates) {
       const roomRes = await fetchJsonWithTimeout(`${ep.api}/rooms/${encodeURIComponent(roomName)}`);
@@ -1389,7 +1422,30 @@ app.get('/api/stream', async (req, res) => {
   const authorPermlink = raw.includes('/') ? raw : null;
   if (authorPermlink) {
     const [author, permlink] = authorPermlink.split('/');
-    if (author && permlink && await isEndedStreamPost(author, permlink)) {
+    const post = author && permlink ? await streamPostInfo(author, permlink) : null;
+    if (post) {
+      // The post's room ended, but the same host went live again shortly
+      // after it (OBS restarted into a new room, whose own post Hive refused:
+      // one root post per 5 minutes). That is the stream this post is about.
+      const next = post.created ? newerStreamOfHost(liveByEndpoint, author, post.created) : null;
+      if (next) {
+        const roomRes = await fetchJsonWithTimeout(`${next.ep.api}/rooms/${encodeURIComponent(next.stream.name)}`);
+        const room = roomRes.ok ? roomRes.data : null;
+        if (room && room.mode === 'standalone') {
+          return res.json({
+            found: true,
+            live: true,
+            roomName: next.stream.name,
+            api: next.ep.api,
+            lk: next.ep.lk,
+            host: author,
+            title: room.title || room.post?.title || next.stream.title || '',
+            thumbnail: room.backgroundImage || room.post?.thumbnail || next.stream.thumbnail || '',
+            watermark: !!(room.headless && room.watermark),
+            continuedFrom: permlink,
+          });
+        }
+      }
       return res.status(404).json({ found: false, endedStream: true });
     }
   }

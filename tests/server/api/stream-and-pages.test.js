@@ -34,6 +34,22 @@ function streamServers({ rooms = {}, streams = {}, hive = null } = {}) {
 }
 
 describe('GET /api/stream', () => {
+  it('always tries live.3speak.tv, even when the env list names only other servers', async () => {
+    const LIVE = 'https://live.3speak.tv';
+    const f = installFetch((url) => {
+      if (url === `${LIVE}/streams`) return json([{ name: 'badadib-whuw9d5', live: true }]);
+      if (url === `${LIVE}/rooms/badadib-whuw9d5`) return json({ mode: 'standalone', host: 'badadib', title: 'just a test' });
+      if (url.startsWith(EP1) || url.startsWith(EP2)) return json({ error: 'not found' }, 404);
+      return undefined;
+    });
+    const res = await request(app).get('/api/stream?v=badadib/badadib-whuw9d5');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ found: true, live: true, roomName: 'badadib-whuw9d5', api: LIVE, lk: 'wss://live.3speak.tv', host: 'badadib' });
+    // The env's servers first, live.3speak.tv after them.
+    const apis = calledUrls(f).map((u) => new URL(u).origin);
+    expect(apis.indexOf(LIVE)).toBeGreaterThan(apis.lastIndexOf(EP2));
+  });
+
   it('400 without v or room', async () => {
     installFetch();
     const res = await request(app).get('/api/stream');
@@ -131,6 +147,31 @@ describe('GET /api/stream', () => {
     expect(asked).toEqual(['badadib', 'stream-post']);
     const [, init] = f.mock.calls.find(([u]) => u === 'https://hive.test');
     expect(JSON.parse(init.body).method).toBe('condenser_api.get_content');
+  });
+
+  describe('a stream post whose room ended while its host is live again', () => {
+    const post = (created) => json({ result: { author: 'badadib', permlink: 'badadib-old', created, json_metadata: JSON.stringify({ video: { live: true } }) } });
+    const servers = (createdAt, extra = {}) => streamServers({
+      hive: () => post('2026-11-19T14:44:36'),
+      streams: { [EP2]: [{ name: 'badadib-new', host: 'badadib', live: true, mode: 'standalone', createdAt, ...extra }] },
+      rooms: { [EP2]: { 'badadib-new': { mode: 'standalone', host: 'badadib', title: 'just a test', headless: true, watermark: true } } },
+    });
+
+    it('plays the newer room (OBS restarted into a new room)', async () => {
+      servers('2026-11-19T14:47:14.458Z');
+      const res = await request(app).get('/api/stream?v=badadib/badadib-old');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ found: true, live: true, roomName: 'badadib-new', api: EP2, lk: 'wss://lk2.test', host: 'badadib', title: 'just a test', watermark: true, continuedFrom: 'badadib-old' });
+    });
+
+    it('still says ended for a room from before the post, a day later, or another host', async () => {
+      for (const [createdAt, extra] of [['2026-11-19T14:00:00Z', {}], ['2026-11-20T14:47:00Z', {}], ['2026-11-19T14:47:14Z', { host: 'someoneelse' }]]) {
+        servers(createdAt, extra);
+        const res = await request(app).get('/api/stream?v=badadib/badadib-old');
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({ found: false, endedStream: true });
+      }
+    });
   });
 
   it.each([

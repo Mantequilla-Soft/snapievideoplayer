@@ -1831,6 +1831,25 @@ body.layout-fill .player-wrapper.has-playlist-dock > .vjs-playlist-dock {
   font: 12px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* A narrow page (a phone): the list under the video, a grid of cards. */
+.player-wrapper.has-playlist-below {
+  display: flex;
+  flex-direction: column;
+  max-height: none;
+}
+
+.player-wrapper.has-playlist-below > .vjs-playlist-dock.is-below {
+  flex: none;
+  width: 100%;
+  height: min(60vh, 440px);
+}
+
+.vjs-playlist-dock.is-below .vjs-playlist-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  align-content: start;
+}
+
 /* A narrow list (a small embed) has no room for the name: position and close only. */
 .vjs-playlist-dock {
   container-type: inline-size;

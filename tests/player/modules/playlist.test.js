@@ -120,7 +120,29 @@ describe('the docked list', () => {
     $('.vjs-playlist-toggle').click();
     expect(dock().hidden).toBe(false);
     expect(wrapper.classList.contains('has-playlist-dock')).toBe(true);
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+  });
+
+  it('scrolls the list, never the page, to the current video', async () => {
+    const pl = list();
+    mountPlaylist(player, pl, vi.fn(async () => {}));
+    const ol = $('.vjs-playlist-items');
+    Object.defineProperty(ol, 'clientHeight', { configurable: true, get: () => 200 });
+    document.querySelectorAll('.vjs-playlist-card').forEach((c, i) => {
+      Object.defineProperty(c, 'offsetTop', { configurable: true, get: () => 8 + i * 150 });
+      Object.defineProperty(c, 'offsetHeight', { configurable: true, get: () => 140 });
+    });
+    $('.vjs-playlist-next').click();
+    await flush();
+    $('.vjs-playlist-next').click();
+    await flush();
+    // The third card ends at 448: the list scrolls so its bottom shows.
+    expect(ol.scrollTop).toBe(448 - 200 + 8);
+    $('.vjs-playlist-prev').click();
+    await flush();
+    $('.vjs-playlist-prev').click();
+    await flush();
+    expect(ol.scrollTop).toBe(0);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 
   it('in an embed the player fills the height beside it, and is fluid again once closed', () => {
@@ -160,10 +182,55 @@ describe('the docked list', () => {
   });
 });
 
-describe('the list over the video', () => {
-  it('a narrow frame starts with it closed; opened, it lies over the video', () => {
+describe('the list below the video', () => {
+  it('a narrow page (a phone) puts it under the video, open from the start', () => {
     document.body.innerHTML = '';
     setup({ width: 300 });
+    mountPlaylist(player, list(), vi.fn());
+    expect(dock().hidden).toBe(false);
+    expect(dock().parentElement).toBe(wrapper);
+    expect(dock().classList.contains('is-below')).toBe(true);
+    expect(dock().classList.contains('is-overlay')).toBe(false);
+    expect(wrapper.classList.contains('has-playlist-below')).toBe(true);
+    expect(wrapper.classList.contains('has-playlist-dock')).toBe(false);
+    expect(player.fill).not.toHaveBeenCalled();
+  });
+
+  it('x closes it, the list button brings it back below, and a pick leaves it open', async () => {
+    document.body.innerHTML = '';
+    setup({ width: 300 });
+    const playItem = vi.fn(async () => {});
+    mountPlaylist(player, list(), playItem);
+    $('.vjs-playlist-close').click();
+    expect(dock().hidden).toBe(true);
+    expect(wrapper.classList.contains('has-playlist-below')).toBe(false);
+    $('.vjs-playlist-toggle').click();
+    expect(dock().classList.contains('is-below')).toBe(true);
+    document.querySelectorAll('.vjs-playlist-card')[1].click();
+    await flush();
+    expect(playItem).toHaveBeenCalled();
+    expect(dock().hidden).toBe(false);
+  });
+
+  it('goes over the video in fullscreen and back below after', () => {
+    document.body.innerHTML = '';
+    setup({ width: 300 });
+    mountPlaylist(player, list(), vi.fn());
+    player.state.fullscreen = true;
+    player.trigger('fullscreenchange');
+    expect(dock().parentElement).toBe(player.el());
+    expect(dock().classList.contains('is-below')).toBe(false);
+    player.state.fullscreen = false;
+    player.trigger('fullscreenchange');
+    expect(dock().classList.contains('is-below')).toBe(true);
+  });
+});
+
+describe('the list over the video', () => {
+  it('a narrow embed starts with it closed; opened, it lies over the video', () => {
+    document.body.innerHTML = '';
+    setup({ width: 300 });
+    document.body.classList.add('iframe-mode');
     mountPlaylist(player, list(), vi.fn());
     expect(dock().hidden).toBe(true);
     $('.vjs-playlist-toggle').click();
@@ -201,6 +268,7 @@ describe('the list over the video', () => {
   it('a pick over the video closes the list so the video shows', async () => {
     document.body.innerHTML = '';
     setup({ width: 300 });
+    document.body.classList.add('iframe-mode');
     mountPlaylist(player, list(), vi.fn(async () => {}));
     $('.vjs-playlist-toggle').click();
     document.querySelectorAll('.vjs-playlist-card')[1].click();
