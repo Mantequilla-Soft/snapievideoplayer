@@ -149,6 +149,31 @@ describe('GET /api/stream', () => {
     expect(JSON.parse(init.body).method).toBe('condenser_api.get_content');
   });
 
+  describe('a stream post whose room ended while its host is live again', () => {
+    const post = (created) => json({ result: { author: 'badadib', permlink: 'badadib-old', created, json_metadata: JSON.stringify({ video: { live: true } }) } });
+    const servers = (createdAt, extra = {}) => streamServers({
+      hive: () => post('2026-11-19T14:44:36'),
+      streams: { [EP2]: [{ name: 'badadib-new', host: 'badadib', live: true, mode: 'standalone', createdAt, ...extra }] },
+      rooms: { [EP2]: { 'badadib-new': { mode: 'standalone', host: 'badadib', title: 'just a test', headless: true, watermark: true } } },
+    });
+
+    it('plays the newer room (OBS restarted into a new room)', async () => {
+      servers('2026-11-19T14:47:14.458Z');
+      const res = await request(app).get('/api/stream?v=badadib/badadib-old');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ found: true, live: true, roomName: 'badadib-new', api: EP2, lk: 'wss://lk2.test', host: 'badadib', title: 'just a test', watermark: true, continuedFrom: 'badadib-old' });
+    });
+
+    it('still says ended for a room from before the post, a day later, or another host', async () => {
+      for (const [createdAt, extra] of [['2026-11-19T14:00:00Z', {}], ['2026-11-20T14:47:00Z', {}], ['2026-11-19T14:47:14Z', { host: 'someoneelse' }]]) {
+        servers(createdAt, extra);
+        const res = await request(app).get('/api/stream?v=badadib/badadib-old');
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({ found: false, endedStream: true });
+      }
+    });
+  });
+
   it.each([
     ['an ordinary video post', () => hivePost('badadib', 'p', { video: { duration: 10 } })],
     ['metadata that is not JSON', () => hivePost('badadib', 'p', 'nope{')],
