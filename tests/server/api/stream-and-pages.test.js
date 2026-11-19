@@ -34,6 +34,22 @@ function streamServers({ rooms = {}, streams = {}, hive = null } = {}) {
 }
 
 describe('GET /api/stream', () => {
+  it('always tries live.3speak.tv, even when the env list names only other servers', async () => {
+    const LIVE = 'https://live.3speak.tv';
+    const f = installFetch((url) => {
+      if (url === `${LIVE}/streams`) return json([{ name: 'badadib-whuw9d5', live: true }]);
+      if (url === `${LIVE}/rooms/badadib-whuw9d5`) return json({ mode: 'standalone', host: 'badadib', title: 'just a test' });
+      if (url.startsWith(EP1) || url.startsWith(EP2)) return json({ error: 'not found' }, 404);
+      return undefined;
+    });
+    const res = await request(app).get('/api/stream?v=badadib/badadib-whuw9d5');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ found: true, live: true, roomName: 'badadib-whuw9d5', api: LIVE, lk: 'wss://live.3speak.tv', host: 'badadib' });
+    // The env's servers first, live.3speak.tv after them.
+    const apis = calledUrls(f).map((u) => new URL(u).origin);
+    expect(apis.indexOf(LIVE)).toBeGreaterThan(apis.lastIndexOf(EP2));
+  });
+
   it('400 without v or room', async () => {
     installFetch();
     const res = await request(app).get('/api/stream');

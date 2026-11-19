@@ -159,19 +159,29 @@ const SELF_BASE = (process.env.PUBLIC_BASE_URL || 'https://preview-player.okinok
 // integrators change nothing. Env `STREAM_ENDPOINTS` is a comma-separated list
 // of "apiBase|livekitWsUrl" pairs; defaults cover production (live.3speak.tv,
 // where 3speak.tv and preview.3speak.tv stream since 2026-10-18), preview's old
-// okinoko server and the older public hangouts API. Without live.3speak.tv a
-// running stream there answered { endedStream: true }: "This stream has
-// already ended" in every embed while the stream was live.
-const STREAM_ENDPOINTS = (process.env.STREAM_ENDPOINTS
-  || 'https://live.3speak.tv|wss://live.3speak.tv,https://hangouts.okinoko.io|wss://livekit.okinoko.io,https://hangout-api.3speak.tv|wss://livekit.3speak.tv')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .map((pair) => {
-    const [api, lk] = pair.split('|').map((x) => (x || '').trim());
-    return { api: (api || '').replace(/\/$/, ''), lk: lk || '' };
-  })
-  .filter((e) => e.api && e.lk);
+// okinoko server and the older public hangouts API.
+//
+// live.3speak.tv is ALWAYS probed, last when the env list leaves it out:
+// without it a running stream there answered { endedStream: true }, "This
+// stream has already ended" in every embed while the stream was live. Changing
+// the code default did not help a server whose env still named an older list
+// (play.3speak.tv, 2026-11-17 and again 2026-11-19).
+const PRODUCTION_STREAM_ENDPOINT = 'https://live.3speak.tv|wss://live.3speak.tv';
+const STREAM_ENDPOINTS = parseStreamEndpoints(process.env.STREAM_ENDPOINTS
+  || `${PRODUCTION_STREAM_ENDPOINT},https://hangouts.okinoko.io|wss://livekit.okinoko.io,https://hangout-api.3speak.tv|wss://livekit.3speak.tv`);
+
+function parseStreamEndpoints(list) {
+  const out = `${list},${PRODUCTION_STREAM_ENDPOINT}`
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const [api, lk] = pair.split('|').map((x) => (x || '').trim());
+      return { api: (api || '').replace(/\/$/, ''), lk: lk || '' };
+    })
+    .filter((e) => e.api && e.lk);
+  return out.filter((e, i) => out.findIndex((x) => x.api === e.api) === i);
+}
 
 // fetch with an abort timeout (Node 18+/22 global fetch).
 async function fetchJsonWithTimeout(url, timeoutMs = 4000) {
